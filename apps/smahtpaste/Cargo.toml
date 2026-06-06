@@ -1,0 +1,13 @@
+[package]
+name = "smahtpaste"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arboard = "3.6.1"
+async-openai = { version = "0.41.0", features = ["chat-completion"] }
+base64 = "0.22.1"
+image = "0.25.10"
+schemars = "1.2.1"
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["full"] }
