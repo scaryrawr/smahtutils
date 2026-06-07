@@ -1,2 +1,2 @@
 [workspace]
-members = ['apps/smahtpaste']
+members = ['apps/wickedpaste']

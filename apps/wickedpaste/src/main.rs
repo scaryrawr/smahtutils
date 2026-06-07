@@ -1,4 +1,4 @@
-//! `smahtpaste` — read clipboard content and convert it to HTML & GitHub Flavored Markdown.
+//! `wickedpaste` — read clipboard content and convert it to HTML & GitHub Flavored Markdown.
 //!
 //! This binary reads the system clipboard (image or text), sends it to a local
 //! OpenAI-compatible endpoint (default `http://127.0.0.1:14892/v1`), and prints
@@ -7,7 +7,7 @@
 //! ## Usage
 //!
 //! ```bash
-//! smahtpaste
+//! wickedpaste
 //! ```
 //!
 //! It will detect whether the clipboard holds an image or plain text and
@@ -29,6 +29,7 @@ use async_openai::{
     },
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use clap::Parser;
 use image::ImageEncoder as _;
 use schemars::{JsonSchema, schema_for};
 use serde_json::json;
@@ -111,15 +112,28 @@ fn get_clipboard_content()
     Ok(None)
 }
 
+/// Command line arguments for wickedpaste.
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// The base URL of the OpenAI-compatible API endpoint
+    #[arg(long)]
+    base_url: String,
+
+    /// The model name to use
+    #[arg(long)]
+    model: String,
+}
+
 /// Entry point: read clipboard, send to local LLM, print JSON result.
 ///
 /// 1. Reads clipboard content (image → text fallback) via [`get_clipboard_content`].
-/// 2. Sends the content to a local OpenAI-compatible endpoint (default
-///    `http://127.0.0.1:14892/v1`) using the `Qwen3.5-9B-Heretic-mxfp4` model.
+/// 2. Sends the content to the specified OpenAI-compatible endpoint using the specified model.
 /// 3. Expects a JSON response matching [`SmahtText`] schema.
 /// 4. Prints each choice's content to stdout.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
     // Read clipboard; if nothing was found, exit silently.
     let content = get_clipboard_content()?;
     if content.is_none() {
@@ -129,9 +143,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Safety: we know content is Some because we just checked is_none above.
     let content = content.expect("clipboard content should be present");
 
-    // Connect to a local OpenAI-compatible endpoint.
-    // NOTE: this URL may need updating if the local server port changes.
-    let config = OpenAIConfig::new().with_api_base("http://127.0.0.1:14892/v1");
+    // Connect to the specified OpenAI-compatible endpoint.
+    let config = OpenAIConfig::new().with_api_base(&args.base_url);
 
     let client = Client::with_config(config);
 
@@ -158,10 +171,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let request = CreateChatCompletionRequestArgs::default()
         .max_tokens(512u32)
-        .model("Qwen3.5-9B-Heretic-mxfp4")
+        .model(&args.model)
         .messages([
             ChatCompletionRequestSystemMessage::from(
-                "Create HTML and Markdown representation of the content it may be image contents to text formats or text transformations to other text formats. The HTML should be minimal, just what would be inside of the body excluding the body, no styling, only required attributes, core elements.",
+                "Create HTML and Markdown representation of the content it may be image contents to text formats or text transformations to other text formats. The HTML should be minimal, we don't need the <html> or other top level tags, no body, no styling, avoid adding unneeded whitespace to HTML, very plain minimal unfancy html elements.",
             )
             .into(),
             user_message.into(),
