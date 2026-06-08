@@ -2689,6 +2689,15 @@ dependencies = [
  "schemars",
  "serde_json",
  "tokio",
+ "wickedsmaht-config",
+]
+
+[[package]]
+name = "wickedsmaht-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

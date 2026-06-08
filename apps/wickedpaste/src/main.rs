@@ -1,20 +1,23 @@
 //! `wickedpaste` — read clipboard content and convert it to HTML & GitHub Flavored Markdown.
 //!
-//! This binary reads the system clipboard (image or text), sends it to a local
-//! OpenAI-compatible endpoint (default `http://127.0.0.1:14892/v1`), and prints
-//! the resulting HTML + Markdown JSON to stdout.
+//! This binary reads the system clipboard (image or text), sends it to an
+//! OpenAI-compatible endpoint, and prints the resulting HTML + Markdown JSON to
+//! stdout.
 //!
 //! ## Usage
 //!
 //! ```bash
-//! wickedpaste
+//! wickedpaste --base-url http://127.0.0.1:14892/v1 --model my-model
 //! ```
 //!
 //! It will detect whether the clipboard holds an image or plain text and
 //! accordingly construct a multimodal prompt. The response format is a JSON
 //! object with two keys: `html` and `markdown`.
 
-use std::error::Error;
+use std::{
+    error::Error,
+    io::{Error as IoError, ErrorKind},
+};
 
 mod clipboard;
 
@@ -30,6 +33,7 @@ use async_openai::{
 use clap::Parser;
 use schemars::{JsonSchema, schema_for};
 use serde_json::json;
+use wickedsmaht_config::Config;
 
 use crate::clipboard::get_clipboard_content;
 
@@ -49,13 +53,19 @@ pub struct SmahtText {
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// The base URL of the OpenAI-compatible API endpoint
+    /// The base URL of the OpenAI-compatible API endpoint.
+    ///
+    /// If omitted, wickedpaste reads `base_url` from
+    /// `$HOME/.wickedsmaht/config.json`.
     #[arg(long)]
-    base_url: String,
+    base_url: Option<String>,
 
-    /// The model name to use
+    /// The model name to use.
+    ///
+    /// If omitted, wickedpaste reads `model` from
+    /// `$HOME/.wickedsmaht/config.json`.
     #[arg(long)]
-    model: String,
+    model: Option<String>,
 }
 
 /// Entry point: read clipboard, send to local LLM, print JSON result.
@@ -67,13 +77,15 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
+    let (base_url, model) = resolve_api_settings(args)?;
+
     // Read clipboard; if nothing was found, exit silently.
     let Some(content) = get_clipboard_content()? else {
         return Ok(());
     };
 
     // Connect to the specified OpenAI-compatible endpoint.
-    let config = OpenAIConfig::new().with_api_base(&args.base_url);
+    let config = OpenAIConfig::new().with_api_base(&base_url);
 
     let client = Client::with_config(config);
 
@@ -100,7 +112,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let request = CreateChatCompletionRequestArgs::default()
         .max_tokens(512u32)
-        .model(&args.model)
+        .model(&model)
         .messages([
             ChatCompletionRequestSystemMessage::from(
                 "Create HTML and Markdown representation of the content it may be image contents to text formats or text transformations to other text formats. The HTML should be minimal, we don't need the <html> or other top level tags, no body, no styling, avoid adding unneeded whitespace to HTML, very plain minimal unfancy html elements.",
@@ -120,4 +132,68 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn resolve_api_settings(args: Args) -> Result<(String, String), Box<dyn Error>> {
+    let config = if args.base_url.is_some() && args.model.is_some() {
+        Config::default()
+    } else {
+        Config::load()?
+    };
+
+    let base_url = required_setting(args.base_url, config.base_url, "--base-url", "base_url")?;
+    let model = required_setting(args.model, config.model, "--model", "model")?;
+
+    Ok((base_url, model))
+}
+
+fn required_setting(
+    cli_value: Option<String>,
+    config_value: Option<String>,
+    flag_name: &str,
+    config_key: &str,
+) -> Result<String, IoError> {
+    cli_value.or(config_value).ok_or_else(|| {
+        IoError::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "missing required setting: pass `{flag_name}` or set `{config_key}` in $HOME/.wickedsmaht/config.json"
+            ),
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_setting_prefers_cli_value() {
+        assert_eq!(
+            required_setting(
+                Some("cli-value".into()),
+                Some("config-value".into()),
+                "--setting",
+                "setting"
+            )
+            .unwrap(),
+            "cli-value"
+        );
+    }
+
+    #[test]
+    fn required_setting_uses_config_value_when_cli_is_omitted() {
+        assert_eq!(
+            required_setting(None, Some("config-value".into()), "--setting", "setting").unwrap(),
+            "config-value"
+        );
+    }
+
+    #[test]
+    fn required_setting_errors_when_not_provided() {
+        let error = required_setting(None, None, "--setting", "setting").unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("--setting"));
+    }
 }

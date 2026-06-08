@@ -58,17 +58,15 @@ pub fn get_clipboard_content()
     // Try reading image first — images carry richer context for conversion.
     // If the clipboard holds no image, fall through to text.
     if let Ok(image) = clipboard.get_image() {
-        return Ok(Some(
-            ChatCompletionRequestUserMessageContentPart::ImageUrl(
-                ChatCompletionRequestMessageContentPartImage {
-                    image_url: ImageUrl {
-                        // Encode the raw RGBA bytes as a PNG data URL for the API.
-                        url: clipboard_image_data_url(image)?,
-                        detail: None, // default quality ("auto")
-                    },
+        return Ok(Some(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+            ChatCompletionRequestMessageContentPartImage {
+                image_url: ImageUrl {
+                    // Encode the raw RGBA bytes as a PNG data URL for the API.
+                    url: clipboard_image_data_url(image)?,
+                    detail: None, // default quality ("auto")
                 },
-            ),
-        ));
+            },
+        )));
     }
 
     // Fall back to plain text if no image was available.

@@ -1,2 +1,2 @@
 [workspace]
-members = ['apps/wickedpaste']
+members = ['apps/wickedpaste', 'crates/wickedsmaht-config']
