@@ -80,13 +80,9 @@ impl SmahtiesMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SmahtiesMcp {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "Local semantic code search over the repository where smahties is running.".into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
+            "Local semantic code search over the repository where smahties is running.",
+        )
     }
 }
 
