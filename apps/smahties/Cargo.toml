@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 async-openai = { version = "0.41.0", features = ["embedding"] }
-axum = "0.8.7"
 clap = { version = "4.6.1", features = ["derive"] }
 ignore = "0.4"
 notify = "8.1"
@@ -35,4 +34,3 @@ wickedsmaht-config = { version = "0.1.0", path = "../../crates/wickedsmaht-confi
 
 [dev-dependencies]
 tempfile = "3.23"
-tower = "0.5"

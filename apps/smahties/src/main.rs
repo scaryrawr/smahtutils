@@ -1,9 +1,8 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use smahties::{
     Result,
-    api::router,
     embedding::OpenAiEmbedder,
     indexer::Indexer,
     mcp,
@@ -14,7 +13,6 @@ use smahties::{
     store::Store,
     watcher,
 };
-use tokio::net::TcpListener;
 use wickedsmaht_config::{Config, ResolvableSetting};
 
 #[derive(Parser)]
@@ -24,13 +22,9 @@ struct Args {
     #[arg(long, default_value = ".")]
     root: PathBuf,
 
-    /// Local address for the HTTP service.
-    #[arg(long, default_value = "127.0.0.1:17678")]
-    bind: SocketAddr,
-
-    /// Run as an MCP stdio server instead of an HTTP server.
-    #[arg(long)]
-    mcp: bool,
+    /// Deprecated; smahties always runs as an MCP stdio server.
+    #[arg(long = "mcp", hide = true)]
+    _mcp: bool,
 
     /// OpenAI-compatible API base URL.
     #[arg(long)]
@@ -44,20 +38,11 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    init_tracing(args.mcp);
+    init_tracing();
     let (state, _watcher) = build_state(&args).await?;
 
-    if args.mcp {
-        tracing::info!("smahties MCP server is listening on stdio");
-        return mcp::serve(state).await;
-    }
-
-    let app = router(state);
-    let listener = TcpListener::bind(args.bind).await?;
-    tracing::info!(bind = %args.bind, "smahties is listening");
-    axum::serve(listener, app).await?;
-
-    Ok(())
+    tracing::info!("smahties MCP server is listening on stdio");
+    mcp::serve(state).await
 }
 
 async fn build_state(args: &Args) -> Result<(AppState, notify::RecommendedWatcher)> {
@@ -113,11 +98,9 @@ fn resolve_api_settings(args: &Args) -> Result<(String, String)> {
     Ok((base_url, model))
 }
 
-fn init_tracing(mcp: bool) {
-    let subscriber = tracing_subscriber::fmt().with_ansi(!mcp);
-    if mcp {
-        subscriber.with_writer(std::io::stderr).init();
-    } else {
-        subscriber.init();
-    }
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .init();
 }

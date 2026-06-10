@@ -3,7 +3,7 @@
     "smahties": {
       "type": "local",
       "command": "cargo",
-      "args": ["run", "--bin", "smahties", "--", "--mcp"],
+      "args": ["run", "--bin", "smahties"],
       "tools": ["*"]
     }
   }
