@@ -14,10 +14,7 @@
 //! accordingly construct a multimodal prompt. The response format is a JSON
 //! object with two keys: `html` and `markdown`.
 
-use std::{
-    error::Error,
-    io::{Error as IoError, ErrorKind},
-};
+use std::error::Error;
 
 mod clipboard;
 
@@ -33,7 +30,7 @@ use async_openai::{
 use clap::Parser;
 use schemars::{JsonSchema, schema_for};
 use serde_json::json;
-use wickedsmaht_config::Config;
+use wickedsmaht_config::{Config, ResolvableSetting};
 
 use crate::clipboard::get_clipboard_content;
 
@@ -141,59 +138,11 @@ fn resolve_api_settings(args: Args) -> Result<(String, String), Box<dyn Error>> 
         Config::load()?
     };
 
-    let base_url = required_setting(args.base_url, config.base_url, "--base-url", "base_url")?;
-    let model = required_setting(args.model, config.model, "--model", "model")?;
+    let base_url = String::resolve(args.base_url, config.base_url, "--base-url", "base_url")?;
+    let model = String::resolve(args.model, config.model, "--model", "model")?;
 
     Ok((base_url, model))
 }
 
-fn required_setting(
-    cli_value: Option<String>,
-    config_value: Option<String>,
-    flag_name: &str,
-    config_key: &str,
-) -> Result<String, IoError> {
-    cli_value.or(config_value).ok_or_else(|| {
-        IoError::new(
-            ErrorKind::InvalidInput,
-            format!(
-                "missing required setting: pass `{flag_name}` or set `{config_key}` in $HOME/.wickedsmaht/config.json"
-            ),
-        )
-    })
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn required_setting_prefers_cli_value() {
-        assert_eq!(
-            required_setting(
-                Some("cli-value".into()),
-                Some("config-value".into()),
-                "--setting",
-                "setting"
-            )
-            .unwrap(),
-            "cli-value"
-        );
-    }
-
-    #[test]
-    fn required_setting_uses_config_value_when_cli_is_omitted() {
-        assert_eq!(
-            required_setting(None, Some("config-value".into()), "--setting", "setting").unwrap(),
-            "config-value"
-        );
-    }
-
-    #[test]
-    fn required_setting_errors_when_not_provided() {
-        let error = required_setting(None, None, "--setting", "setting").unwrap_err();
-
-        assert_eq!(error.kind(), ErrorKind::InvalidInput);
-        assert!(error.to_string().contains("--setting"));
-    }
-}
+mod tests {}
