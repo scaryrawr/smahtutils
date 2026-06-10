@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use crate::{
     Result,
     embedding::OpenAiEmbedder,
-    model::{LeaseStatus, Priority, QueueStats, QueuedWork},
+    model::{CodeUnit, LeaseStatus, Priority, QueueStats, QueuedWork, SourceFile},
     parser::ParserRegistry,
     scanner::Scanner,
     store::Store,
@@ -20,6 +20,7 @@ use crate::{
 const INDEXER_LEASE_NAME: &str = "indexer";
 const INDEXER_LEASE_TTL_SECONDS: i64 = 15;
 const WORK_STALE_AFTER_SECONDS: i64 = 300;
+const MAX_INDEXER_BATCH_WORK_ITEMS: usize = 128;
 
 #[derive(Clone)]
 pub struct Indexer {
@@ -137,9 +138,7 @@ impl Indexer {
 
             match outcome {
                 ProcessNextOutcome::Idle => return Ok(IndexRunOutcome::Complete(summary)),
-                ProcessNextOutcome::Completed => summary.completed += 1,
-                ProcessNextOutcome::Requeued => summary.requeued += 1,
-                ProcessNextOutcome::Failed => summary.failed += 1,
+                ProcessNextOutcome::Processed(processed) => summary.add(processed),
             }
         }
     }
@@ -196,12 +195,52 @@ impl Indexer {
     }
 
     async fn process_next_work(&self) -> Result<ProcessNextOutcome> {
+        let mut summary = IndexRunSummary::default();
+        let mut batch = Vec::new();
+        let mut claimed = 0;
+
+        while claimed < MAX_INDEXER_BATCH_WORK_ITEMS {
+            let Some(work) = self.claim_next_work()? else {
+                break;
+            };
+            claimed += 1;
+
+            let item = work.item;
+            let claim = work.claim;
+            match self.prepare_item(&item).await {
+                Ok(WorkPreparation::Complete) => {
+                    self.complete_claimed_work(&item, claim, &mut summary);
+                }
+                Ok(WorkPreparation::Embed(prepared)) => {
+                    batch.push(PreparedEmbeddingWork {
+                        item,
+                        claim,
+                        source_file: prepared.source_file,
+                        parser_key: prepared.parser_key,
+                        units: prepared.units,
+                    });
+                }
+                Err(error) => {
+                    self.fail_claimed_work(&item, claim, &error, &mut summary);
+                }
+            }
+        }
+
+        if claimed == 0 {
+            return Ok(ProcessNextOutcome::Idle);
+        }
+
+        self.embed_and_commit_batch(batch, &mut summary).await;
+        Ok(ProcessNextOutcome::Processed(summary))
+    }
+
+    fn claim_next_work(&self) -> Result<Option<ClaimedWork>> {
         let Some(item) = self
             .inner
             .store
             .claim_next_work(&self.inner.owner, WORK_STALE_AFTER_SECONDS)?
         else {
-            return Ok(ProcessNextOutcome::Idle);
+            return Ok(None);
         };
         let claim = WorkClaim::new(
             Arc::clone(&self.inner.store),
@@ -209,69 +248,33 @@ impl Indexer {
             self.inner.owner.clone(),
         );
 
-        match self.handle_item(item.clone()).await {
-            Ok(WorkOutcome::Complete) => {
-                if let Err(error) = claim.complete() {
-                    warn!(work_id = item.id, error = %error, "failed to complete work item");
-                }
-                Ok(ProcessNextOutcome::Completed)
-            }
-            Ok(WorkOutcome::Requeue(reason)) => {
-                if let Err(error) = claim.requeue(&reason) {
-                    warn!(work_id = item.id, error = %error, "failed to requeue work item");
-                }
-                Ok(ProcessNextOutcome::Requeued)
-            }
-            Err(error) => {
-                warn!(path = %item.path.display(), error = %error, "failed to index path");
-                match claim.requeue(&error.to_string()) {
-                    Ok(true) => {
-                        let rel = self.inner.scanner.relative_path(&item.path);
-                        if let Err(mark_error) =
-                            self.inner.store.mark_error(&rel, &error.to_string())
-                        {
-                            warn!(path = %rel, error = %mark_error, "failed to persist indexing error");
-                        }
-                    }
-                    Ok(false) => {
-                        debug!(
-                            work_id = item.id,
-                            "skipping error persistence for work item no longer owned by this process"
-                        );
-                    }
-                    Err(fail_error) => {
-                        warn!(work_id = item.id, error = %fail_error, "failed to release failed work item");
-                    }
-                }
-                Ok(ProcessNextOutcome::Failed)
-            }
-        }
+        Ok(Some(ClaimedWork { item, claim }))
     }
 
-    async fn handle_item(&self, item: QueuedWork) -> Result<WorkOutcome> {
+    async fn prepare_item(&self, item: &QueuedWork) -> Result<WorkPreparation> {
         if item.delete || !item.path.exists() {
             let rel = self.inner.scanner.relative_path(&item.path);
             self.inner.store.delete_path_prefix(&rel)?;
-            return Ok(WorkOutcome::Complete);
+            return Ok(WorkPreparation::Complete);
         }
 
         if item.path.is_dir() {
             for path in self.inner.scanner.discover_files(&item.path)? {
                 self.enqueue_path(path, item.priority).await;
             }
-            return Ok(WorkOutcome::Complete);
+            return Ok(WorkPreparation::Complete);
         }
 
         if !self.inner.scanner.is_discoverable_file(&item.path)? {
             let rel = self.inner.scanner.relative_path(&item.path);
             self.inner.store.delete_file(&rel)?;
-            return Ok(WorkOutcome::Complete);
+            return Ok(WorkPreparation::Complete);
         }
 
         let Some(source_file) = self.inner.scanner.read_source(&item.path)? else {
             let rel = self.inner.scanner.relative_path(&item.path);
             self.inner.store.delete_file(&rel)?;
-            return Ok(WorkOutcome::Complete);
+            return Ok(WorkPreparation::Complete);
         };
 
         let parser_key = self
@@ -285,21 +288,101 @@ impl Indexer {
             self.inner.embedder.model(),
         )? {
             debug!(path = %source_file.relative_path, "file already indexed");
-            return Ok(WorkOutcome::Complete);
+            return Ok(WorkPreparation::Complete);
         }
 
         let units = self.inner.parser.parse(&source_file)?;
         self.inner
             .store
             .touch_work_claim(item.id, &self.inner.owner)?;
-        let texts = units
+
+        Ok(WorkPreparation::Embed(PreparedFile {
+            source_file,
+            parser_key,
+            units,
+        }))
+    }
+
+    async fn embed_and_commit_batch(
+        &self,
+        batch: Vec<PreparedEmbeddingWork>,
+        summary: &mut IndexRunSummary,
+    ) {
+        if batch.is_empty() {
+            return;
+        }
+
+        let texts = batch
             .iter()
+            .flat_map(|work| work.units.iter())
             .map(|unit| unit.source.clone())
             .collect::<Vec<_>>();
-        let embeddings = self.inner.embedder.embed_texts(&texts).await?;
+
+        let embeddings = match self.inner.embedder.embed_texts(&texts).await {
+            Ok(embeddings) if embeddings.len() == texts.len() => embeddings,
+            Ok(embeddings) => {
+                let error = crate::SmahtiesError::InvalidRequest(format!(
+                    "embedding response count {} did not match unit count {}",
+                    embeddings.len(),
+                    texts.len()
+                ));
+                for work in batch {
+                    self.fail_claimed_work(&work.item, work.claim, &error, summary);
+                }
+                return;
+            }
+            Err(error) => {
+                for work in batch {
+                    self.fail_claimed_work(&work.item, work.claim, &error, summary);
+                }
+                return;
+            }
+        };
+
+        let mut offset = 0;
+        for work in batch {
+            let PreparedEmbeddingWork {
+                item,
+                claim,
+                source_file,
+                parser_key,
+                units,
+            } = work;
+            let end = offset + units.len();
+            let file_embeddings = &embeddings[offset..end];
+            offset = end;
+
+            match self.commit_embedded_file(
+                &item,
+                &source_file,
+                &parser_key,
+                &units,
+                file_embeddings,
+            ) {
+                Ok(WorkOutcome::Complete) => {
+                    self.complete_claimed_work(&item, claim, summary);
+                }
+                Ok(WorkOutcome::Requeue(reason)) => {
+                    self.requeue_claimed_work(&item, claim, &reason, summary);
+                }
+                Err(error) => {
+                    self.fail_claimed_work(&item, claim, &error, summary);
+                }
+            }
+        }
+    }
+
+    fn commit_embedded_file(
+        &self,
+        item: &QueuedWork,
+        source_file: &SourceFile,
+        parser_key: &str,
+        units: &[CodeUnit],
+        embeddings: &[Vec<f32>],
+    ) -> Result<WorkOutcome> {
         if embeddings.len() != units.len() {
             return Err(crate::SmahtiesError::InvalidRequest(format!(
-                "embedding response count {} did not match unit count {}",
+                "embedding response count {} did not match file unit count {}",
                 embeddings.len(),
                 units.len()
             )));
@@ -328,25 +411,109 @@ impl Indexer {
         self.inner.store.replace_file_units(
             &source_file.relative_path,
             &source_file.hash,
-            &parser_key,
-            &units,
+            parser_key,
+            units,
             self.inner.embedder.model(),
-            &embeddings,
+            embeddings,
         )?;
         Ok(WorkOutcome::Complete)
+    }
+
+    fn complete_claimed_work(
+        &self,
+        item: &QueuedWork,
+        claim: WorkClaim,
+        summary: &mut IndexRunSummary,
+    ) {
+        if let Err(error) = claim.complete() {
+            warn!(work_id = item.id, error = %error, "failed to complete work item");
+        }
+        summary.completed += 1;
+    }
+
+    fn requeue_claimed_work(
+        &self,
+        item: &QueuedWork,
+        claim: WorkClaim,
+        reason: &str,
+        summary: &mut IndexRunSummary,
+    ) {
+        if let Err(error) = claim.requeue(reason) {
+            warn!(work_id = item.id, error = %error, "failed to requeue work item");
+        }
+        summary.requeued += 1;
+    }
+
+    fn fail_claimed_work(
+        &self,
+        item: &QueuedWork,
+        claim: WorkClaim,
+        error: &dyn std::fmt::Display,
+        summary: &mut IndexRunSummary,
+    ) {
+        let error = error.to_string();
+        warn!(path = %item.path.display(), error = %error, "failed to index path");
+        match claim.requeue(&error) {
+            Ok(true) => {
+                let rel = self.inner.scanner.relative_path(&item.path);
+                if let Err(mark_error) = self.inner.store.mark_error(&rel, &error) {
+                    warn!(path = %rel, error = %mark_error, "failed to persist indexing error");
+                }
+            }
+            Ok(false) => {
+                debug!(
+                    work_id = item.id,
+                    "skipping error persistence for work item no longer owned by this process"
+                );
+            }
+            Err(fail_error) => {
+                warn!(work_id = item.id, error = %fail_error, "failed to release failed work item");
+            }
+        }
+        summary.failed += 1;
     }
 }
 
 enum ProcessNextOutcome {
     Idle,
-    Completed,
-    Requeued,
-    Failed,
+    Processed(IndexRunSummary),
+}
+
+impl IndexRunSummary {
+    fn add(&mut self, other: Self) {
+        self.completed += other.completed;
+        self.requeued += other.requeued;
+        self.failed += other.failed;
+    }
 }
 
 enum WorkOutcome {
     Complete,
     Requeue(String),
+}
+
+enum WorkPreparation {
+    Complete,
+    Embed(PreparedFile),
+}
+
+struct ClaimedWork {
+    item: QueuedWork,
+    claim: WorkClaim,
+}
+
+struct PreparedFile {
+    source_file: SourceFile,
+    parser_key: String,
+    units: Vec<CodeUnit>,
+}
+
+struct PreparedEmbeddingWork {
+    item: QueuedWork,
+    claim: WorkClaim,
+    source_file: SourceFile,
+    parser_key: String,
+    units: Vec<CodeUnit>,
 }
 
 struct WorkClaim {
