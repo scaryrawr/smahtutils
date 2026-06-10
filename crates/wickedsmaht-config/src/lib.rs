@@ -6,11 +6,13 @@
 //! ```json
 //! {
 //!   "base_url": "http://127.0.0.1:14892/v1",
-//!   "model": "my-model"
+//!   "model": "my-model",
+//!   "coding_embedding_model": "CodeRankEmbed-mxpf4"
 //! }
 //! ```
 //!
-//! `base-url` is also accepted as an alias for `base_url` when deserializing.
+//! Kebab-case aliases, such as `base-url` and `coding-embedding-model`, are
+//! also accepted when deserializing.
 
 use std::{
     env,
@@ -38,6 +40,9 @@ pub struct Config {
     pub base_url: Option<String>,
     /// Default model name.
     pub model: Option<String>,
+    /// Default coding embedding model name.
+    #[serde(alias = "coding-embedding-model")]
+    pub coding_embedding_model: Option<String>,
 }
 
 impl Config {
@@ -230,14 +235,15 @@ mod tests {
     }
 
     #[test]
-    fn parses_base_url_and_model() {
+    fn parses_base_url_model_and_coding_embedding_model() {
         let path = unique_test_path("config.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
             r#"{
                 "base_url": "http://127.0.0.1:14892/v1",
-                "model": "local-model"
+                "model": "local-model",
+                "coding_embedding_model": "CodeRankEmbed-mxpf4"
             }"#,
         )
         .unwrap();
@@ -247,6 +253,7 @@ mod tests {
             Config {
                 base_url: Some("http://127.0.0.1:14892/v1".into()),
                 model: Some("local-model".into()),
+                coding_embedding_model: Some("CodeRankEmbed-mxpf4".into()),
             }
         );
     }
@@ -267,6 +274,26 @@ mod tests {
         assert_eq!(
             Config::load_from_path(&path).unwrap().base_url,
             Some("http://127.0.0.1:14892/v1".into())
+        );
+    }
+
+    #[test]
+    fn parses_coding_embedding_model_alias() {
+        let path = unique_test_path("embedding-alias-config.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{
+                "coding-embedding-model": "CodeRankEmbed-mxpf4"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            Config::load_from_path(&path)
+                .unwrap()
+                .coding_embedding_model,
+            Some("CodeRankEmbed-mxpf4".into())
         );
     }
 
