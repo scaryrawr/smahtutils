@@ -124,6 +124,91 @@ impl Error for ConfigError {
     }
 }
 
+/// Error returned when a required setting is missing from both CLI and config.
+#[derive(Debug)]
+pub struct SettingError {
+    pub flag_name: String,
+    pub config_key: String,
+}
+
+impl fmt::Display for SettingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "missing required setting: pass `{}` or set `{}` in $HOME/.wickedsmaht/config.json",
+            self.flag_name, self.config_key
+        )
+    }
+}
+
+impl Error for SettingError {}
+
+/// Trait for types that can be resolved from CLI arguments and configuration.
+///
+/// This trait generalizes the pattern where a setting can be provided via
+/// command-line arguments, falls back to a configuration file, and is required
+/// (i.e., at least one source must provide a value).
+pub trait ResolvableSetting {
+    /// Resolve the setting from CLI and config values.
+    ///
+    /// Returns `Ok(value)` if either the CLI or config provides a value,
+    /// preferring CLI over config. Returns `Err` if both are missing.
+    fn resolve(
+        cli_value: Option<String>,
+        config_value: Option<String>,
+        flag_name: &str,
+        config_key: &str,
+    ) -> Result<String, SettingError>;
+}
+
+impl ResolvableSetting for String {
+    fn resolve(
+        cli_value: Option<String>,
+        config_value: Option<String>,
+        flag_name: &str,
+        config_key: &str,
+    ) -> Result<String, SettingError> {
+        cli_value.or(config_value).ok_or_else(|| SettingError {
+            flag_name: flag_name.to_string(),
+            config_key: config_key.to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod setting_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn setting_prefers_cli_value() {
+        let result = String::resolve(
+            Some("cli-value".into()),
+            Some("config-value".into()),
+            "--setting",
+            "setting",
+        );
+
+        assert_eq!(result.unwrap(), "cli-value");
+    }
+
+    #[test]
+    fn setting_uses_config_value_when_cli_is_omitted() {
+        let result = String::resolve(None, Some("config-value".into()), "--setting", "setting");
+
+        assert_eq!(result.unwrap(), "config-value");
+    }
+
+    #[test]
+    fn setting_errors_when_not_provided() {
+        let error = String::resolve(None, None, "--setting", "setting").unwrap_err();
+
+        assert_eq!(error.flag_name, "--setting");
+        assert_eq!(error.config_key, "setting");
+        assert!(error.to_string().contains("--setting"));
+        assert!(error.to_string().contains("setting"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
