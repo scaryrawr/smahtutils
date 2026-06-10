@@ -42,7 +42,7 @@ impl SmahtiesMcp {
     }
 
     #[tool(
-        description = "Request high-priority indexing for a file or directory path under the repo root."
+        description = "Request high-priority indexing for a file or directory path under the active smahties runtime scope."
     )]
     async fn index_path(
         &self,
@@ -81,7 +81,7 @@ impl SmahtiesMcp {
 impl ServerHandler for SmahtiesMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            "Local semantic code search over the repository where smahties is running.",
+            "Local semantic code search scoped to the directory where smahties is running.",
         )
     }
 }

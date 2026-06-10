@@ -7,6 +7,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use smahties::{
     Result,
+    context::RuntimeContext,
     embedding::OpenAiEmbedder,
     indexer::{IndexRunOutcome, IndexRunSummary, Indexer},
     mcp,
@@ -15,7 +16,7 @@ use smahties::{
         ServiceStatus,
     },
     parser::ParserRegistry,
-    scanner::{EXCLUDED_DIR_NAMES, EXCLUDED_FILE_NAMES, Scanner, ensure_state_dir},
+    scanner::{EXCLUDED_DIR_NAMES, EXCLUDED_FILE_NAMES, Scanner},
     service::{self, AppState, IndexRequest, ListIndexedRequest, QueryRequest},
     store::Store,
     watcher,
@@ -25,7 +26,7 @@ use wickedsmaht_config::{Config, ResolvableSetting};
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Repository or local coding directory to index.
+    /// Repository or local coding directory to serve.
     #[arg(long, default_value = ".")]
     root: PathBuf,
 
@@ -179,14 +180,22 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn build_mcp_state(args: &Args) -> Result<(AppState, notify::RecommendedWatcher)> {
+async fn build_mcp_state(args: &Args) -> Result<(AppState, Option<notify::RecommendedWatcher>)> {
     let state = build_cli_state(args, ApiRequirement::Required)?;
     state.indexer.spawn_worker();
-    state
-        .indexer
-        .enqueue_path(state.indexer.root().to_path_buf(), Priority::Low)
-        .await;
-    let watcher = watcher::start(state.indexer.root(), state.indexer.clone())?;
+    let watcher = if let Some(auto_index_root) = state.context.auto_index_root() {
+        let auto_index_root = auto_index_root.to_path_buf();
+        state
+            .indexer
+            .enqueue_path(auto_index_root.clone(), Priority::Low)
+            .await;
+        Some(watcher::start(&auto_index_root, state.indexer.clone())?)
+    } else {
+        tracing::info!(
+            "auto indexing is disabled because smahties is not running inside a Git repository"
+        );
+        None
+    };
 
     Ok((state, watcher))
 }
@@ -198,8 +207,9 @@ enum ApiRequirement {
 }
 
 fn build_cli_state(args: &Args, api_requirement: ApiRequirement) -> Result<AppState> {
-    let root = args.root.canonicalize()?;
-    let state_dir = ensure_state_dir(&root)?;
+    let runtime_root = args.root.canonicalize()?;
+    let context = RuntimeContext::resolve(runtime_root)?;
+    let state_dir = context.state_dir()?;
     let (base_url, model) = resolve_api_settings(args, api_requirement)?;
 
     let store = Arc::new(Store::open(state_dir.join("smahties.sqlite"))?);
@@ -209,7 +219,7 @@ fn build_cli_state(args: &Args, api_requirement: ApiRequirement) -> Result<AppSt
     for excluded_file in EXCLUDED_FILE_NAMES {
         store.delete_file_name(excluded_file)?;
     }
-    let scanner = Scanner::new(root.clone());
+    let scanner = Scanner::new(context.storage_root().to_path_buf());
     let parser = ParserRegistry;
     let embedder = OpenAiEmbedder::new(&base_url, model);
     let indexer = Indexer::new(scanner, parser, Arc::clone(&store), embedder.clone());
@@ -218,6 +228,7 @@ fn build_cli_state(args: &Args, api_requirement: ApiRequirement) -> Result<AppSt
         store,
         indexer,
         embedder,
+        context,
     })
 }
 
@@ -358,6 +369,22 @@ fn print_status(response: &ServiceStatus, json: bool) -> Result<()> {
     }
 
     println!("Root: {}", response.root);
+    if let Some(repository_root) = &response.repository_root {
+        println!("Repository root: {repository_root}");
+    }
+    println!("Runtime root: {}", response.runtime_root);
+    println!(
+        "Scope: {}",
+        response.scope_prefix.as_deref().unwrap_or("<root>")
+    );
+    println!(
+        "Auto indexing: {}",
+        if response.auto_indexing_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     println!("Model: {}", response.model);
     println!(
         "Queue: {} high, {} low, {} in progress",

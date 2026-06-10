@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 use crate::{
     Result, SmahtiesError,
+    context::RuntimeContext,
     embedding::OpenAiEmbedder,
     indexer::Indexer,
     model::{
@@ -19,6 +20,7 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub indexer: Indexer,
     pub embedder: OpenAiEmbedder,
+    pub context: RuntimeContext,
 }
 
 #[derive(Clone, Debug, Deserialize, rmcp::schemars::JsonSchema)]
@@ -49,6 +51,13 @@ pub async fn status(state: &AppState) -> Result<ServiceStatus> {
     state.store.ensure_lexical_index_current()?;
     Ok(ServiceStatus {
         root: state.indexer.root().display().to_string(),
+        repository_root: state
+            .context
+            .repository_root()
+            .map(|path| path.display().to_string()),
+        runtime_root: state.context.runtime_root().display().to_string(),
+        scope_prefix: state.context.scope_prefix().map(str::to_string),
+        auto_indexing_enabled: state.context.auto_indexing_enabled(),
         model: state.indexer.model().to_string(),
         queue: state.indexer.queue_stats().await,
         store: state.store.stats()?,
@@ -57,7 +66,10 @@ pub async fn status(state: &AppState) -> Result<ServiceStatus> {
 }
 
 pub async fn index_path(state: &AppState, request: IndexRequest) -> Result<IndexResponse> {
-    state.indexer.enqueue_requested_path(&request.path).await?;
+    state
+        .indexer
+        .enqueue_requested_path_under(&request.path, state.context.runtime_root())
+        .await?;
     Ok(IndexResponse {
         queued: true,
         path: request.path,
@@ -67,6 +79,9 @@ pub async fn index_path(state: &AppState, request: IndexRequest) -> Result<Index
 pub async fn query_code(state: &AppState, request: QueryRequest) -> Result<QueryResponse> {
     let limit = request.limit.unwrap_or(10).clamp(1, 100);
     let mode = request.mode.unwrap_or_default();
+    let path_prefix = state
+        .context
+        .scoped_path_prefix(request.path_prefix.as_deref())?;
     let fts_query = build_fts_query(&request.query);
     let lexical_limit = limit.saturating_mul(20).clamp(50, 500);
 
@@ -76,7 +91,7 @@ pub async fn query_code(state: &AppState, request: QueryRequest) -> Result<Query
                 state.store.ensure_lexical_index_current()?;
                 state.store.lexical_search(
                     query,
-                    request.path_prefix.as_deref(),
+                    path_prefix.as_deref(),
                     request.language.as_deref(),
                     lexical_limit,
                 )?
@@ -100,7 +115,7 @@ pub async fn query_code(state: &AppState, request: QueryRequest) -> Result<Query
             .store
             .embeddings_for_model(
                 state.embedder.model(),
-                request.path_prefix.as_deref(),
+                path_prefix.as_deref(),
                 request.language.as_deref(),
             )?
             .into_iter()
@@ -251,8 +266,11 @@ pub fn list_indexed(state: &AppState, request: ListIndexedRequest) -> Result<Ind
     let limit = request.limit.unwrap_or(50).clamp(1, 200);
     let offset = request.offset.unwrap_or(0);
     let include_source = request.include_source.unwrap_or(false) && limit <= 20;
+    let path_prefix = state
+        .context
+        .scoped_path_prefix(request.path_prefix.as_deref())?;
     let items = state.store.list_indexed_units(
-        request.path_prefix.as_deref(),
+        path_prefix.as_deref(),
         request.language.as_deref(),
         limit,
         offset,
