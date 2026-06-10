@@ -14,6 +14,8 @@ pub enum SmahtiesError {
     #[error(transparent)]
     Sql(#[from] rusqlite::Error),
     #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
     OpenAi(#[from] async_openai::error::OpenAIError),
     #[error(transparent)]
     Notify(#[from] notify::Error),

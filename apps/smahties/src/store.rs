@@ -332,6 +332,24 @@ impl Store {
     pub fn enqueue_work(&self, path: &Path, priority: Priority, delete: bool) -> Result<()> {
         let conn = self.lock()?;
         let now = Self::unix_now();
+        let path = path.to_string_lossy().into_owned();
+        let priority = priority.as_i64();
+        let delete_path = i64::from(delete);
+        let changed = conn.execute(
+            r#"
+            UPDATE work_queue
+            SET priority = MAX(priority, ?2),
+                updated_at = ?4
+            WHERE path = ?1
+              AND delete_path = ?3
+              AND status = 'pending'
+            "#,
+            params![path, priority, delete_path, now],
+        )?;
+        if changed > 0 {
+            return Ok(());
+        }
+
         conn.execute(
             r#"
             INSERT INTO work_queue (
@@ -339,12 +357,7 @@ impl Store {
             )
             VALUES (?1, ?2, ?3, 'pending', ?4, ?4)
             "#,
-            params![
-                path.to_string_lossy(),
-                priority.as_i64(),
-                i64::from(delete),
-                now
-            ],
+            params![path, priority, delete_path, now],
         )?;
         Ok(())
     }
@@ -876,6 +889,29 @@ mod tests {
                 .fail_work_for_owner(first.id, "owner-2", "retry")
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn enqueue_work_updates_existing_pending_item_but_preserves_in_progress_follow_up() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("smahties.sqlite")).unwrap();
+        let path = dir.path().join("src/lib.rs");
+
+        store.enqueue_work(&path, Priority::Low, false).unwrap();
+        store.enqueue_work(&path, Priority::High, false).unwrap();
+
+        let stats = store.queue_stats().unwrap();
+        assert_eq!(stats.high_priority, 1);
+        assert_eq!(stats.low_priority, 0);
+
+        let claimed = store.claim_next_work("owner", 300).unwrap().unwrap();
+        assert_eq!(claimed.priority, Priority::High);
+        store.enqueue_work(&path, Priority::Low, false).unwrap();
+
+        let stats = store.queue_stats().unwrap();
+        assert_eq!(stats.in_progress, 1);
+        assert_eq!(stats.low_priority, 1);
+        assert!(store.claim_next_work("other-owner", 300).unwrap().is_some());
     }
 
     fn code_unit(path: &str, id: &str) -> CodeUnit {
