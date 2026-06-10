@@ -122,8 +122,7 @@ impl Scanner {
     }
 
     pub fn resolve_existing_under_root(&self, requested: &str) -> Result<PathBuf> {
-        let root = self.root.clone();
-        self.resolve_existing_under(&root, requested)
+        self.resolve_existing_under(&self.root, requested)
     }
 
     pub fn resolve_existing_under(&self, base: &Path, requested: &str) -> Result<PathBuf> {
