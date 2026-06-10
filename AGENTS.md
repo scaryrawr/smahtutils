@@ -2,32 +2,37 @@
 
 ## Project Structure & Module Organization
 
-This is a small Rust workspace. The root `Cargo.toml` is a virtual workspace with one member, `apps/wickedpaste`. Keep application code under `apps/wickedpaste/src/`: `main.rs` owns CLI parsing, OpenAI-compatible chat requests, and stdout output; `clipboard.rs` owns system clipboard reading plus image-to-PNG-data-URL conversion. Build output belongs in `target/` and is ignored.
+This Rust 2024 workspace has three members in the root `Cargo.toml`:
+
+- `apps/wickedpaste` — clipboard-to-LLM converter. `main.rs` handles CLI/config resolution and OpenAI-compatible chat requests; `clipboard.rs` reads image first, then text. Depends on `wickedsmaht-config`.
+- `apps/smahties` — local semantic code search/RAG service. `main.rs` builds state and runs either HTTP or MCP stdio; `api.rs` exposes axum routes; `mcp.rs` exposes MCP tools; `scanner`/`parser`/`indexer`/`watcher` handle discovery and tree-sitter indexing; `store.rs` persists SQLite under `<root>/.smahties/`.
+- `crates/wickedsmaht-config` — shared `$HOME/.wickedsmaht/config.json` loader and `ResolvableSetting` fallback trait.
 
 ## Build, Test, and Development Commands
 
-Run commands from the repository root unless you intentionally scope to a package.
+Run from the repository root unless scoping intentionally.
 
-- `cargo run -p wickedpaste -- --base-url http://127.0.0.1:14892/v1 --model <model>` — run the clipboard converter against a local/OpenAI-compatible endpoint. `--base-url` and `--model` are required CLI arguments.
-- `cargo fmt --all` — format all workspace Rust code.
-- `cargo fmt --all -- --check` — narrow formatting validation.
-- `cargo clippy --workspace --all-targets -- -D warnings` — lint with warnings treated as errors.
-- `cargo test --workspace` — compile and run tests for all workspace members.
+- `cargo fmt --all -- --check` — fastest formatting validation; `cargo fmt --all` fixes formatting.
+- `cargo clippy --workspace --all-targets -- -D warnings` — lint all packages with warnings as errors.
+- `cargo test --workspace` — run all tests. For a narrow check, use filters such as `cargo test -p smahties scanner::`.
+- `cargo run -p wickedpaste -- --base-url http://127.0.0.1:14892/v1 --model <model>` — convert current clipboard content; flags may be omitted only when config supplies `base_url` and `model`.
+- `cargo run -p smahties -- --base-url http://127.0.0.1:14892/v1 --coding-embedding-model <embedding-model>` — start HTTP on `127.0.0.1:17678` for the current directory.
+- `cargo run -p smahties -- --mcp` — run the MCP stdio server; `.mcp.json` relies on config for model settings.
 
-Current Cargo emits a resolver warning because the virtual workspace does not set `workspace.resolver` while the crate uses edition 2024; do not treat that warning as a test failure.
+Cargo currently warns that the virtual workspace resolver defaults to `1` despite edition 2024; do not treat that warning as a failed validation.
 
 ## Coding Style & Naming Conventions
 
-Use Rust 2024 and rustfmt defaults. Prefer small modules with explicit ownership like the existing split between CLI/request orchestration and clipboard helpers. Keep public structs/functions documented when they define CLI/API-facing behavior. Preserve the image-first, text-fallback clipboard behavior unless the task explicitly changes product behavior.
+Use rustfmt defaults. Keep CLI/API-facing structs and behavior documented. Preserve `wickedpaste` clipboard behavior (image first, text fallback) unless explicitly changing product behavior. Keep shared config defaults/resolution in `wickedsmaht-config`.
 
 ## Testing Guidelines
 
-There are currently no dedicated test files; `cargo test --workspace` is still the baseline compile/test check. Add unit tests next to code with `#[cfg(test)]` modules when extracting pure logic, especially for clipboard image validation or request-shaping helpers. Avoid tests that require a live clipboard or LLM endpoint unless clearly marked and isolated.
+Prefer `#[cfg(test)]` modules next to pure logic. Existing tests cover config loading, scanner exclusions, embeddings, parser extraction, vectors, service query helpers, and SQLite store behavior. Avoid tests requiring a live clipboard, LLM endpoint, or embedding server unless clearly isolated.
 
 ## Commit & Pull Request Guidelines
 
-Recent history uses short imperative subjects, sometimes scoped (for example, `wickedpaste: add --base-url and --model CLI arguments`). Follow that style. PRs should state the validation commands run and mention any local endpoint/clipboard assumptions used for manual testing.
+Recent commits use short imperative subjects, sometimes scoped (`wickedpaste: ...`) or conventional (`feat(config): ...`). PR notes should list validation commands and local endpoint/clipboard assumptions.
 
 ## Security & Configuration Tips
 
-Clipboard contents may be sensitive. Do not add debug logging that prints clipboard text, base64 image payloads, API responses, or secrets. Keep endpoint URLs, model names, and credentials configurable rather than hardcoded.
+Do not log clipboard contents, base64 images, API responses, embeddings, or secrets. Keep endpoint URLs and model names configurable. `smahties` writes `.smahties/smahties.sqlite`, skips large/binary/excluded paths, and may be expensive on large trees.
