@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "smahties": {
+      "type": "local",
+      "command": "cargo",
+      "args": ["run", "--bin", "smahties", "--", "--mcp"],
+      "tools": ["*"]
+    }
+  }
+}
