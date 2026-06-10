@@ -299,15 +299,20 @@ impl Store {
     pub fn delete_path_prefix(&self, prefix: &str) -> Result<()> {
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
-        let prefix = prefix.trim_end_matches('/');
-        let prefix_like = format!("{prefix}/%");
+        let prefix = path_prefix_filter(Some(prefix));
         tx.execute(
-            "DELETE FROM code_units_fts WHERE file_path = ?1 OR file_path LIKE ?2",
-            params![prefix, prefix_like],
+            r#"
+            DELETE FROM code_units_fts
+            WHERE file_path = ?1 OR substr(file_path, 1, length(?1) + 1) = ?1 || '/'
+            "#,
+            params![prefix],
         )?;
         tx.execute(
-            "DELETE FROM files WHERE path = ?1 OR path LIKE ?2",
-            params![prefix, prefix_like],
+            r#"
+            DELETE FROM files
+            WHERE path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/'
+            "#,
+            params![prefix],
         )?;
         tx.commit()?;
         Ok(())
@@ -562,7 +567,7 @@ impl Store {
         language: Option<&str>,
     ) -> Result<Vec<StoredEmbedding>> {
         let conn = self.lock()?;
-        let path_like = path_prefix.map(|prefix| format!("{prefix}%"));
+        let path_prefix = path_prefix_filter(path_prefix);
         let mut stmt = conn.prepare(
             r#"
             SELECT
@@ -572,12 +577,16 @@ impl Store {
             FROM code_units u
             JOIN embeddings e ON e.unit_id = u.id
             WHERE e.model = ?1
-              AND (?2 IS NULL OR u.file_path LIKE ?2)
+              AND (
+                  ?2 IS NULL
+                  OR u.file_path = ?2
+                  OR substr(u.file_path, 1, length(?2) + 1) = ?2 || '/'
+              )
               AND (?3 IS NULL OR u.language = ?3)
             "#,
         )?;
 
-        let rows = stmt.query_map(params![model, path_like, language], |row| {
+        let rows = stmt.query_map(params![model, path_prefix, language], |row| {
             let blob: Vec<u8> = row.get(12)?;
             let vector = vector_from_blob(&blob).map_err(|message| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -618,7 +627,7 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<LexicalMatch>> {
         let conn = self.lock()?;
-        let path_like = path_prefix.map(|prefix| format!("{prefix}%"));
+        let path_prefix = path_prefix_filter(path_prefix);
         let mut stmt = conn.prepare(
             r#"
             SELECT
@@ -628,7 +637,11 @@ impl Store {
             FROM code_units_fts
             JOIN code_units u ON u.id = code_units_fts.unit_id
             WHERE code_units_fts MATCH ?1
-              AND (?2 IS NULL OR u.file_path LIKE ?2)
+              AND (
+                  ?2 IS NULL
+                  OR u.file_path = ?2
+                  OR substr(u.file_path, 1, length(?2) + 1) = ?2 || '/'
+              )
               AND (?3 IS NULL OR u.language = ?3)
             ORDER BY code_units_fts.rank
             LIMIT ?4
@@ -636,7 +649,7 @@ impl Store {
         )?;
 
         let rows = stmt.query_map(
-            params![fts_query, path_like, language, limit as u64],
+            params![fts_query, path_prefix, language, limit as u64],
             |row| {
                 Ok(LexicalMatch {
                     unit: CodeUnit {
@@ -671,12 +684,16 @@ impl Store {
         include_source: bool,
     ) -> Result<Vec<IndexedItem>> {
         let conn = self.lock()?;
-        let path_like = path_prefix.map(|prefix| format!("{prefix}%"));
+        let path_prefix = path_prefix_filter(path_prefix);
         let mut stmt = conn.prepare(
             r#"
             SELECT file_path, language, unit_type, name, start_line, end_line, source
             FROM code_units
-            WHERE (?1 IS NULL OR file_path LIKE ?1)
+            WHERE (
+                ?1 IS NULL
+                OR file_path = ?1
+                OR substr(file_path, 1, length(?1) + 1) = ?1 || '/'
+            )
               AND (?2 IS NULL OR language = ?2)
             ORDER BY file_path, start_line
             LIMIT ?3 OFFSET ?4
@@ -684,7 +701,7 @@ impl Store {
         )?;
 
         let rows = stmt.query_map(
-            params![path_like, language, limit as u64, offset as u64],
+            params![path_prefix, language, limit as u64, offset as u64],
             |row| {
                 Ok(IndexedItem {
                     file_path: row.get(0)?,
@@ -759,6 +776,13 @@ impl Store {
             .lock()
             .map_err(|_| SmahtiesError::InvalidRequest("database mutex is poisoned".into()))
     }
+}
+
+fn path_prefix_filter(path_prefix: Option<&str>) -> Option<String> {
+    path_prefix
+        .map(|prefix| prefix.trim_end_matches('/'))
+        .filter(|prefix| !prefix.is_empty())
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -865,6 +889,60 @@ mod tests {
         assert_eq!(stats.indexed_units, 0);
         assert_eq!(stats.embedded_units, 0);
         assert_eq!(stats.lexical_units, 0);
+    }
+
+    #[test]
+    fn path_prefix_filters_match_path_boundaries() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("smahties.sqlite")).unwrap();
+        let scoped = code_unit("apps/api_v1/src/lib.rs", "unit-1");
+        let sibling = code_unit("apps/apiXv1/src/lib.rs", "unit-2");
+
+        store
+            .replace_file_units(
+                "apps/api_v1/src/lib.rs",
+                "hash",
+                "parser",
+                &[scoped],
+                "model",
+                &[vec![1.0]],
+            )
+            .unwrap();
+        store
+            .replace_file_units(
+                "apps/apiXv1/src/lib.rs",
+                "hash",
+                "parser",
+                &[sibling],
+                "model",
+                &[vec![1.0]],
+            )
+            .unwrap();
+
+        let matches = store
+            .lexical_search("load_config*", Some("apps/api_v1"), Some("text"), 10)
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].unit.file_path, "apps/api_v1/src/lib.rs");
+
+        let items = store
+            .list_indexed_units(Some("apps/api_v1"), Some("text"), 10, 0, false)
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].file_path, "apps/api_v1/src/lib.rs");
+
+        let embeddings = store
+            .embeddings_for_model("model", Some("apps/api_v1"), Some("text"))
+            .unwrap();
+        assert_eq!(embeddings.len(), 1);
+        assert_eq!(embeddings[0].unit.file_path, "apps/api_v1/src/lib.rs");
+
+        store.delete_path_prefix("apps/api_v1").unwrap();
+        let items = store
+            .list_indexed_units(None, Some("text"), 10, 0, false)
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].file_path, "apps/apiXv1/src/lib.rs");
     }
 
     #[test]

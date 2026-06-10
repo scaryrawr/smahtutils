@@ -95,6 +95,10 @@ pub struct LeaseStatus {
 #[derive(Clone, Debug, rmcp::schemars::JsonSchema, Serialize)]
 pub struct ServiceStatus {
     pub root: String,
+    pub repository_root: Option<String>,
+    pub runtime_root: String,
+    pub scope_prefix: Option<String>,
+    pub auto_indexing_enabled: bool,
     pub model: String,
     pub queue: QueueStats,
     pub store: StoreStats,

@@ -81,6 +81,12 @@ impl Indexer {
         Ok(())
     }
 
+    pub async fn enqueue_requested_path_under(&self, requested: &str, base: &Path) -> Result<()> {
+        let path = self.inner.scanner.resolve_existing_under(base, requested)?;
+        self.enqueue_path(path, Priority::High).await;
+        Ok(())
+    }
+
     pub async fn enqueue_path(&self, path: PathBuf, priority: Priority) {
         if let Err(error) = self.inner.store.enqueue_work(&path, priority, false) {
             warn!(path = %path.display(), error = %error, "failed to enqueue indexing work");

@@ -122,18 +122,36 @@ impl Scanner {
     }
 
     pub fn resolve_existing_under_root(&self, requested: &str) -> Result<PathBuf> {
+        let root = self.root.clone();
+        self.resolve_existing_under(&root, requested)
+    }
+
+    pub fn resolve_existing_under(&self, base: &Path, requested: &str) -> Result<PathBuf> {
         let path = Path::new(requested);
         let absolute = if path.is_absolute() {
             path.to_path_buf()
         } else {
-            self.root.join(path)
+            base.join(path)
         };
 
         let root = self.root.canonicalize()?;
+        let base = base.canonicalize()?;
+        if !base.starts_with(&root) {
+            return Err(crate::SmahtiesError::InvalidRequest(format!(
+                "active smahties scope is outside the indexed root: {}",
+                base.display()
+            )));
+        }
         let canonical = absolute.canonicalize()?;
         if !canonical.starts_with(root) {
             return Err(crate::SmahtiesError::InvalidRequest(format!(
                 "path is outside the indexed root: {}",
+                absolute.display()
+            )));
+        }
+        if !canonical.starts_with(&base) {
+            return Err(crate::SmahtiesError::InvalidRequest(format!(
+                "path is outside the active smahties scope: {}",
                 absolute.display()
             )));
         }
@@ -240,5 +258,34 @@ mod tests {
         assert!(files.contains(&source_path));
         assert!(!files.contains(&gitignore_path));
         assert!(!scanner.is_discoverable_file(&gitignore_path).unwrap());
+    }
+
+    #[test]
+    fn resolve_existing_under_rejects_paths_outside_active_scope() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let app = root.join("apps/api");
+        let sibling = root.join("apps/web");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(app.join("lib.rs"), "fn api() {}\n").unwrap();
+        fs::write(sibling.join("lib.rs"), "fn web() {}\n").unwrap();
+
+        let scanner = Scanner::new(root.to_path_buf());
+
+        assert_eq!(
+            scanner.resolve_existing_under(&app, "lib.rs").unwrap(),
+            app.join("lib.rs").canonicalize().unwrap()
+        );
+        assert!(
+            scanner
+                .resolve_existing_under(&app, "../web/lib.rs")
+                .is_err()
+        );
+        assert!(
+            scanner
+                .resolve_existing_under(&app, sibling.join("lib.rs").to_str().unwrap())
+                .is_err()
+        );
     }
 }
