@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -23,6 +24,19 @@ const WORK_STALE_AFTER_SECONDS: i64 = 300;
 #[derive(Clone)]
 pub struct Indexer {
     inner: Arc<IndexerInner>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IndexRunSummary {
+    pub completed: u64,
+    pub requeued: u64,
+    pub failed: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum IndexRunOutcome {
+    Complete(IndexRunSummary),
+    Interrupted(IndexRunSummary),
 }
 
 struct IndexerInner {
@@ -86,6 +100,44 @@ impl Indexer {
         tokio::spawn(async move { indexer.worker_loop().await });
     }
 
+    pub async fn run_until_idle_or_interrupt(
+        &self,
+        interrupt: impl Future<Output = std::io::Result<()>>,
+    ) -> Result<IndexRunOutcome> {
+        tokio::pin!(interrupt);
+        let mut summary = IndexRunSummary::default();
+
+        loop {
+            if !self.acquire_lease()? {
+                tokio::select! {
+                    interrupt_result = &mut interrupt => {
+                        interrupt_result?;
+                        return Ok(IndexRunOutcome::Interrupted(summary));
+                    }
+                    () = tokio::time::sleep(Duration::from_secs(2)) => {}
+                }
+                continue;
+            }
+
+            let next_work = self.process_next_work();
+            tokio::pin!(next_work);
+            let outcome = tokio::select! {
+                interrupt_result = &mut interrupt => {
+                    interrupt_result?;
+                    return Ok(IndexRunOutcome::Interrupted(summary));
+                }
+                outcome = &mut next_work => outcome?,
+            };
+
+            match outcome {
+                ProcessNextOutcome::Idle => return Ok(IndexRunOutcome::Complete(summary)),
+                ProcessNextOutcome::Completed => summary.completed += 1,
+                ProcessNextOutcome::Requeued => summary.requeued += 1,
+                ProcessNextOutcome::Failed => summary.failed += 1,
+            }
+        }
+    }
+
     pub async fn queue_stats(&self) -> QueueStats {
         self.inner.store.queue_stats().unwrap_or(QueueStats {
             high_priority: 0,
@@ -107,81 +159,85 @@ impl Indexer {
 
     async fn worker_loop(self) {
         loop {
-            let has_lease = self
-                .inner
-                .store
-                .acquire_lease(
-                    INDEXER_LEASE_NAME,
-                    &self.inner.owner,
-                    INDEXER_LEASE_TTL_SECONDS,
-                )
-                .unwrap_or(false);
+            let has_lease = self.acquire_lease().unwrap_or(false);
             if !has_lease {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             }
 
-            match self
-                .inner
-                .store
-                .claim_next_work(&self.inner.owner, WORK_STALE_AFTER_SECONDS)
-            {
-                Ok(Some(item)) => match self.handle_item(item.clone()).await {
-                    Ok(WorkOutcome::Complete) => {
-                        if let Err(error) = self
-                            .inner
-                            .store
-                            .complete_work_for_owner(item.id, &self.inner.owner)
-                        {
-                            warn!(work_id = item.id, error = %error, "failed to complete work item");
-                        }
-                    }
-                    Ok(WorkOutcome::Requeue(reason)) => {
-                        if let Err(error) = self.inner.store.fail_work_for_owner(
-                            item.id,
-                            &self.inner.owner,
-                            &reason,
-                        ) {
-                            warn!(work_id = item.id, error = %error, "failed to requeue work item");
-                        }
-                    }
-                    Err(error) => {
-                        warn!(path = %item.path.display(), error = %error, "failed to index path");
-                        match self.inner.store.fail_work_for_owner(
-                            item.id,
-                            &self.inner.owner,
-                            &error.to_string(),
-                        ) {
-                            Ok(true) => {
-                                let rel = self.inner.scanner.relative_path(&item.path);
-                                if let Err(mark_error) =
-                                    self.inner.store.mark_error(&rel, &error.to_string())
-                                {
-                                    warn!(path = %rel, error = %mark_error, "failed to persist indexing error");
-                                }
-                            }
-                            Ok(false) => {
-                                debug!(
-                                    work_id = item.id,
-                                    "skipping error persistence for work item no longer owned by this process"
-                                );
-                            }
-                            Err(fail_error) => {
-                                warn!(work_id = item.id, error = %fail_error, "failed to release failed work item");
-                            }
-                        }
-                    }
-                },
-                Ok(None) => {
+            match self.process_next_work().await {
+                Ok(ProcessNextOutcome::Idle) => {
                     tokio::select! {
                         () = self.inner.notify.notified() => {}
                         () = tokio::time::sleep(Duration::from_secs(1)) => {}
                     }
                 }
+                Ok(_) => {}
                 Err(error) => {
                     warn!(error = %error, "failed to claim indexing work");
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
+            }
+        }
+    }
+
+    fn acquire_lease(&self) -> Result<bool> {
+        self.inner.store.acquire_lease(
+            INDEXER_LEASE_NAME,
+            &self.inner.owner,
+            INDEXER_LEASE_TTL_SECONDS,
+        )
+    }
+
+    async fn process_next_work(&self) -> Result<ProcessNextOutcome> {
+        let Some(item) = self
+            .inner
+            .store
+            .claim_next_work(&self.inner.owner, WORK_STALE_AFTER_SECONDS)?
+        else {
+            return Ok(ProcessNextOutcome::Idle);
+        };
+        let claim = WorkClaim::new(
+            Arc::clone(&self.inner.store),
+            item.id,
+            self.inner.owner.clone(),
+        );
+
+        match self.handle_item(item.clone()).await {
+            Ok(WorkOutcome::Complete) => {
+                if let Err(error) = claim.complete() {
+                    warn!(work_id = item.id, error = %error, "failed to complete work item");
+                }
+                Ok(ProcessNextOutcome::Completed)
+            }
+            Ok(WorkOutcome::Requeue(reason)) => {
+                if let Err(error) = claim.requeue(&reason) {
+                    warn!(work_id = item.id, error = %error, "failed to requeue work item");
+                }
+                Ok(ProcessNextOutcome::Requeued)
+            }
+            Err(error) => {
+                warn!(path = %item.path.display(), error = %error, "failed to index path");
+                match claim.requeue(&error.to_string()) {
+                    Ok(true) => {
+                        let rel = self.inner.scanner.relative_path(&item.path);
+                        if let Err(mark_error) =
+                            self.inner.store.mark_error(&rel, &error.to_string())
+                        {
+                            warn!(path = %rel, error = %mark_error, "failed to persist indexing error");
+                        }
+                    }
+                    Ok(false) => {
+                        debug!(
+                            work_id = item.id,
+                            "skipping error persistence for work item no longer owned by this process"
+                        );
+                    }
+                    Err(fail_error) => {
+                        warn!(work_id = item.id, error = %fail_error, "failed to release failed work item");
+                    }
+                }
+                Ok(ProcessNextOutcome::Failed)
             }
         }
     }
@@ -275,9 +331,58 @@ impl Indexer {
     }
 }
 
+enum ProcessNextOutcome {
+    Idle,
+    Completed,
+    Requeued,
+    Failed,
+}
+
 enum WorkOutcome {
     Complete,
     Requeue(String),
+}
+
+struct WorkClaim {
+    store: Arc<Store>,
+    id: i64,
+    owner: String,
+    active: bool,
+}
+
+impl WorkClaim {
+    fn new(store: Arc<Store>, id: i64, owner: String) -> Self {
+        Self {
+            store,
+            id,
+            owner,
+            active: true,
+        }
+    }
+
+    fn complete(mut self) -> Result<()> {
+        self.store.complete_work_for_owner(self.id, &self.owner)?;
+        self.active = false;
+        Ok(())
+    }
+
+    fn requeue(mut self, reason: &str) -> Result<bool> {
+        let changed = self
+            .store
+            .fail_work_for_owner(self.id, &self.owner, reason)?;
+        self.active = false;
+        Ok(changed)
+    }
+}
+
+impl Drop for WorkClaim {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self
+                .store
+                .fail_work_for_owner(self.id, &self.owner, "indexing interrupted");
+        }
+    }
 }
 
 fn unix_now() -> u64 {
