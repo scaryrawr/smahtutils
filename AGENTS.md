@@ -5,7 +5,7 @@
 This Rust 2024 workspace has three members in the root `Cargo.toml`:
 
 - `apps/wickedpaste` — clipboard-to-LLM converter. `main.rs` handles CLI/config resolution and OpenAI-compatible chat requests; `clipboard.rs` reads image first, then text. Depends on `wickedsmaht-config`.
-- `apps/smahties` — local semantic code search/RAG service. `main.rs` builds state and runs either HTTP or MCP stdio; `api.rs` exposes axum routes; `mcp.rs` exposes MCP tools; `scanner`/`parser`/`indexer`/`watcher` handle discovery and tree-sitter indexing; `store.rs` persists SQLite under `<root>/.smahties/`.
+- `apps/smahties` — local semantic code search/RAG MCP service. `main.rs` builds state and runs MCP stdio; `mcp.rs` exposes MCP tools; `scanner`/`parser`/`indexer`/`watcher` handle discovery and tree-sitter indexing; `store.rs` persists SQLite under `<root>/.smahties/`.
 - `crates/wickedsmaht-config` — shared `$HOME/.wickedsmaht/config.json` loader and `ResolvableSetting` fallback trait.
 
 ## Build, Test, and Development Commands
@@ -16,8 +16,8 @@ Run from the repository root unless scoping intentionally.
 - `cargo clippy --workspace --all-targets -- -D warnings` — lint all packages with warnings as errors.
 - `cargo test --workspace` — run all tests. For a narrow check, use filters such as `cargo test -p smahties scanner::`.
 - `cargo run -p wickedpaste -- --base-url http://127.0.0.1:14892/v1 --model <model>` — convert current clipboard content; flags may be omitted only when config supplies `base_url` and `model`.
-- `cargo run -p smahties -- --base-url http://127.0.0.1:14892/v1 --coding-embedding-model <embedding-model>` — start HTTP on `127.0.0.1:17678` for the current directory.
-- `cargo run -p smahties -- --mcp` — run the MCP stdio server; `.mcp.json` relies on config for model settings.
+- `cargo run -p smahties -- --base-url http://127.0.0.1:14892/v1 --coding-embedding-model <embedding-model>` — run the MCP stdio server for the current directory.
+- `.mcp.json` runs the MCP stdio server and relies on config for model settings.
 
 Cargo currently warns that the virtual workspace resolver defaults to `1` despite edition 2024; do not treat that warning as a failed validation.
 
