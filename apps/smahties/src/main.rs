@@ -266,10 +266,10 @@ async fn run_blocking_index(state: &AppState, command: &IndexArgs) -> Result<()>
         .indexer
         .run_until_idle_or_interrupt(tokio::signal::ctrl_c())
         .await?;
+    let (status, summary) = index_outcome_parts(outcome);
     let queue = state.indexer.queue_stats().await;
     let store = state.store.stats()?;
     if command.json {
-        let (status, summary) = index_outcome_parts(outcome);
         println!(
             "{}",
             serde_json::json!({
@@ -282,7 +282,6 @@ async fn run_blocking_index(state: &AppState, command: &IndexArgs) -> Result<()>
             })
         );
     } else {
-        let (status, summary) = index_outcome_parts(outcome);
         println!(
             "{status}: {} completed, {} requeued, {} failed. Queue: {} high, {} low, {} in progress. Indexed: {} files, {} units.",
             summary.completed,
