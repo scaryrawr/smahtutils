@@ -26,7 +26,7 @@ Use rustfmt defaults. Keep CLI/API-facing structs documented. Preserve `wickedpa
 
 ## Testing Guidelines
 
-Prefer `#[cfg(test)]` modules next to pure logic. Existing tests cover config loading, scanner exclusions, embeddings, parser extraction, vectors, service query helpers, and SQLite store behavior. Avoid tests requiring live clipboard, LLM, or embedding endpoints unless isolated.
+Prefer `#[cfg(test)]` modules next to pure logic. Existing tests cover config loading, scanner exclusions, embeddings, parser extraction, vectors, service query helpers, and SQLite store behavior. For `smahties` indexer resume/locking changes, preserve queue-backed retry semantics: failed claimed work should return to pending and stale in-progress work should be reclaimable. Avoid tests requiring live clipboard, LLM, or embedding endpoints unless isolated.
 
 ## Commit & Pull Request Guidelines
 
