@@ -2,6 +2,7 @@ use std::{
     fs, io,
     path::Path,
     sync::{Mutex, MutexGuard},
+    time::Duration,
 };
 
 use rusqlite::{Connection, OptionalExtension, params, types::Type};
@@ -19,6 +20,8 @@ pub struct Store {
     conn: Mutex<Connection>,
 }
 
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -27,6 +30,7 @@ impl Store {
         }
 
         let conn = Connection::open(path)?;
+        conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         conn.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
@@ -967,6 +971,49 @@ mod tests {
                 .fail_work_for_owner(first.id, "owner-2", "retry")
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn failed_work_is_requeued_for_resume() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(dir.path().join("smahties.sqlite")).unwrap();
+        let path = dir.path().join("src/lib.rs");
+
+        store.enqueue_work(&path, Priority::Low, false).unwrap();
+        let failed = store.claim_next_work("owner-1", 300).unwrap().unwrap();
+
+        assert!(
+            store
+                .fail_work_for_owner(failed.id, "owner-1", "database is locked")
+                .unwrap()
+        );
+        let stats = store.queue_stats().unwrap();
+        assert_eq!(stats.low_priority, 1);
+        assert_eq!(stats.in_progress, 0);
+
+        let resumed = store.claim_next_work("owner-2", 300).unwrap().unwrap();
+        assert_eq!(resumed.id, failed.id);
+    }
+
+    #[test]
+    fn store_open_waits_for_transient_sqlite_locks() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("smahties.sqlite");
+        Store::open(&db_path).unwrap();
+
+        let blocker = Connection::open(&db_path).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE;").unwrap();
+
+        let db_path_for_thread = db_path.clone();
+        let handle = std::thread::spawn(move || Store::open(db_path_for_thread));
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!handle.is_finished());
+
+        blocker.execute_batch("COMMIT;").unwrap();
+        let reopened = handle.join().unwrap().unwrap();
+
+        assert_eq!(reopened.stats().unwrap().indexed_files, 0);
     }
 
     #[test]
