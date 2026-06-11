@@ -24,6 +24,8 @@ Cargo currently warns that the virtual workspace resolver defaults to `1` despit
 
 Use rustfmt defaults. Keep CLI/API-facing structs documented. Preserve `wickedpaste` clipboard precedence (image before text) unless explicitly changing product behavior. Keep shared config defaults/resolution in `wickedsmaht-config`. For `smahties` language support, update parser specs/dependencies together; unsupported extensions fall back to whole-file text units.
 
+For `smahties` similarity/query performance, prefer dependency-free single-DB optimizations first: stored vector norms, bounded top-K ranking, deferred source loading, and scoped SQLite filters. Physical SQLite sharding only helps when queries can target a subset; unscoped semantic search still requires fanout/merge unless a vector index is added.
+
 ## Testing Guidelines
 
 Prefer `#[cfg(test)]` modules next to pure logic. Existing tests cover config loading, scanner exclusions, embeddings, parser extraction, vectors, service query helpers, and SQLite store behavior. For `smahties` indexer resume/locking changes, preserve queue-backed retry semantics: failed claimed work should return to pending and stale in-progress work should be reclaimable. Avoid tests requiring live clipboard, LLM, or embedding endpoints unless isolated.

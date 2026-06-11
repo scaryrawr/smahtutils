@@ -1,4 +1,8 @@
-use std::{cmp::Ordering, collections::HashMap, sync::Arc};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use serde::Deserialize;
 
@@ -12,7 +16,7 @@ use crate::{
         QueryMode, QueryResponse, ServiceStatus,
     },
     store::Store,
-    vector::cosine_similarity,
+    vector::{cosine_similarity_with_norms, vector_norm},
 };
 
 #[derive(Clone)]
@@ -111,18 +115,23 @@ pub async fn query_code(state: &AppState, request: QueryRequest) -> Result<Query
             .next()
             .ok_or_else(|| SmahtiesError::InvalidRequest("embedding response was empty".into()))?;
 
-        state
-            .store
-            .embeddings_for_model(
-                state.embedder.model(),
-                path_prefix.as_deref(),
-                request.language.as_deref(),
-            )?
-            .into_iter()
-            .filter_map(|entry| {
-                cosine_similarity(&query_embedding, &entry.vector).map(|score| (entry.unit, score))
-            })
-            .collect::<Vec<_>>()
+        let required_unit_ids = if matches!(mode, QueryMode::Hybrid) {
+            lexical_matches
+                .iter()
+                .map(|item| item.unit.id.clone())
+                .collect::<HashSet<_>>()
+        } else {
+            HashSet::new()
+        };
+
+        semantic_top_matches(
+            state,
+            &query_embedding,
+            path_prefix.as_deref(),
+            request.language.as_deref(),
+            limit,
+            &required_unit_ids,
+        )?
     } else {
         Vec::new()
     };
@@ -138,6 +147,85 @@ pub async fn query_code(state: &AppState, request: QueryRequest) -> Result<Query
     matches.truncate(limit);
 
     Ok(QueryResponse { matches })
+}
+
+fn semantic_top_matches(
+    state: &AppState,
+    query_embedding: &[f32],
+    path_prefix: Option<&str>,
+    language: Option<&str>,
+    limit: usize,
+    required_unit_ids: &HashSet<String>,
+) -> Result<Vec<(CodeUnit, f32)>> {
+    let query_norm = vector_norm(query_embedding);
+    if query_norm == 0.0 {
+        return Ok(Vec::new());
+    }
+
+    let mut top = Vec::<ScoredUnitId>::with_capacity(limit);
+    let mut required_scores = HashMap::<String, f32>::new();
+
+    for entry in
+        state
+            .store
+            .embedding_candidates_for_model(state.embedder.model(), path_prefix, language)?
+    {
+        let Some(score) =
+            cosine_similarity_with_norms(query_embedding, &entry.vector, query_norm, entry.norm)
+        else {
+            continue;
+        };
+
+        let unit_id = entry.unit_id;
+        if required_unit_ids.contains(&unit_id) {
+            required_scores.insert(unit_id.clone(), score);
+        }
+        record_top_candidate(&mut top, ScoredUnitId { unit_id, score }, limit);
+    }
+
+    let mut scores = top
+        .into_iter()
+        .map(|candidate| (candidate.unit_id, candidate.score))
+        .collect::<HashMap<_, _>>();
+    scores.extend(required_scores);
+
+    let ids = scores.keys().cloned().collect::<Vec<_>>();
+    Ok(state
+        .store
+        .code_units_by_ids(&ids)?
+        .into_iter()
+        .filter_map(|unit| scores.remove(&unit.id).map(|score| (unit, score)))
+        .collect())
+}
+
+#[derive(Clone, Debug)]
+struct ScoredUnitId {
+    unit_id: String,
+    score: f32,
+}
+
+fn record_top_candidate(top: &mut Vec<ScoredUnitId>, candidate: ScoredUnitId, limit: usize) {
+    if top.len() < limit {
+        top.push(candidate);
+        return;
+    }
+
+    let Some((min_index, min_score)) = top
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| {
+            left.score
+                .partial_cmp(&right.score)
+                .unwrap_or(Ordering::Equal)
+        })
+        .map(|(index, item)| (index, item.score))
+    else {
+        return;
+    };
+
+    if candidate.score > min_score {
+        top[min_index] = candidate;
+    }
 }
 
 fn merge_matches(
@@ -288,7 +376,7 @@ pub fn list_indexed(state: &AppState, request: ListIndexedRequest) -> Result<Ind
 mod tests {
     use crate::model::{CodeUnit, LexicalMatch, QueryMatchKind, QueryMode};
 
-    use super::{build_fts_query, merge_matches};
+    use super::{ScoredUnitId, build_fts_query, merge_matches, record_top_candidate};
 
     #[test]
     fn fts_query_uses_safe_prefix_tokens() {
@@ -313,6 +401,31 @@ mod tests {
         assert_eq!(matches[0].semantic_score, Some(0.8));
         assert_eq!(matches[0].lexical_score, Some(1.0));
         assert!(matches[0].score > 0.9);
+    }
+
+    #[test]
+    fn top_k_ranking_keeps_highest_scoring_candidates() {
+        let mut top = Vec::new();
+        for (unit_id, score) in [("low", 0.1), ("high", 0.9), ("mid", 0.5), ("best", 0.95)] {
+            record_top_candidate(
+                &mut top,
+                ScoredUnitId {
+                    unit_id: unit_id.into(),
+                    score,
+                },
+                2,
+            );
+        }
+
+        top.sort_by(|left, right| {
+            right
+                .score
+                .partial_cmp(&left.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let ids = top.into_iter().map(|item| item.unit_id).collect::<Vec<_>>();
+
+        assert_eq!(ids, ["best", "high"]);
     }
 
     fn code_unit(id: &str) -> CodeUnit {

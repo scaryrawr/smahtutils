@@ -5,15 +5,15 @@ use std::{
     time::Duration,
 };
 
-use rusqlite::{Connection, OptionalExtension, params, types::Type};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::Type};
 
 use crate::{
     Result, SmahtiesError,
     model::{
         CodeUnit, FileError, IndexedItem, LeaseStatus, LexicalMatch, Priority, QueueStats,
-        QueuedWork, StoreStats, StoredEmbedding,
+        QueuedWork, StoreStats, StoredEmbeddingCandidate,
     },
-    vector::{vector_from_blob, vector_to_blob},
+    vector::{vector_from_blob, vector_norm, vector_to_blob},
 };
 
 pub struct Store {
@@ -29,7 +29,7 @@ impl Store {
             fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.busy_timeout(SQLITE_BUSY_TIMEOUT)?;
         conn.execute_batch(
             r#"
@@ -72,12 +72,15 @@ impl Store {
                 unit_id TEXT NOT NULL REFERENCES code_units(id) ON DELETE CASCADE,
                 model TEXT NOT NULL,
                 dimensions INTEGER NOT NULL,
+                norm REAL,
                 vector BLOB NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (unit_id, model)
             );
 
             CREATE INDEX IF NOT EXISTS idx_code_units_file_path ON code_units(file_path);
+            CREATE INDEX IF NOT EXISTS idx_code_units_language_file_path
+            ON code_units(language, file_path);
             CREATE INDEX IF NOT EXISTS idx_embeddings_model ON embeddings(model);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS code_units_fts USING fts5(
@@ -113,11 +116,63 @@ impl Store {
             );
             "#,
         )?;
+        Self::ensure_embedding_norm_column_conn(&conn)?;
+        Self::backfill_embedding_norms_conn(&mut conn)?;
         Self::repair_lexical_index_conn(&conn)?;
 
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    fn ensure_embedding_norm_column_conn(conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("PRAGMA table_info(embeddings)")?;
+        let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        let has_norm = columns
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .iter()
+            .any(|column| column == "norm");
+        if !has_norm {
+            conn.execute("ALTER TABLE embeddings ADD COLUMN norm REAL", [])?;
+        }
+        Ok(())
+    }
+
+    fn backfill_embedding_norms_conn(conn: &mut Connection) -> Result<()> {
+        let updates = {
+            let mut stmt =
+                conn.prepare("SELECT unit_id, model, vector FROM embeddings WHERE norm IS NULL")?;
+            let rows = stmt.query_map([], |row| {
+                let blob: Vec<u8> = row.get(2)?;
+                let vector = vector_from_blob(&blob).map_err(|message| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        Type::Blob,
+                        Box::new(io::Error::new(io::ErrorKind::InvalidData, message)),
+                    )
+                })?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    vector_norm(&vector),
+                ))
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        let tx = conn.transaction()?;
+        for (unit_id, model, norm) in updates {
+            tx.execute(
+                "UPDATE embeddings SET norm = ?3 WHERE unit_id = ?1 AND model = ?2",
+                params![unit_id, model, norm],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     fn repair_lexical_index_conn(conn: &Connection) -> Result<()> {
@@ -245,10 +300,16 @@ impl Store {
             )?;
             tx.execute(
                 r#"
-                INSERT INTO embeddings (unit_id, model, dimensions, vector, updated_at)
-                VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)
+                INSERT INTO embeddings (unit_id, model, dimensions, norm, vector, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
                 "#,
-                params![unit.id, model, vector.len() as u64, vector_to_blob(vector)],
+                params![
+                    unit.id,
+                    model,
+                    vector.len() as u64,
+                    vector_norm(vector),
+                    vector_to_blob(vector)
+                ],
             )?;
             tx.execute(
                 r#"
@@ -564,22 +625,20 @@ impl Store {
         })
     }
 
-    pub fn embeddings_for_model(
+    pub fn embedding_candidates_for_model(
         &self,
         model: &str,
         path_prefix: Option<&str>,
         language: Option<&str>,
-    ) -> Result<Vec<StoredEmbedding>> {
+    ) -> Result<Vec<StoredEmbeddingCandidate>> {
         let conn = self.lock()?;
         let path_prefix = path_prefix_filter(path_prefix);
         let mut stmt = conn.prepare(
             r#"
             SELECT
-                u.id, u.file_path, u.start_line, u.end_line, u.start_byte, u.end_byte,
-                u.unit_type, u.name, u.source, u.source_hash, u.language, u.parser_key,
-                e.vector
-            FROM code_units u
-            JOIN embeddings e ON e.unit_id = u.id
+                e.unit_id, e.vector, e.norm
+            FROM embeddings e
+            JOIN code_units u ON u.id = e.unit_id
             WHERE e.model = ?1
               AND (
                   ?2 IS NULL
@@ -591,31 +650,61 @@ impl Store {
         )?;
 
         let rows = stmt.query_map(params![model, path_prefix, language], |row| {
-            let blob: Vec<u8> = row.get(12)?;
+            let blob: Vec<u8> = row.get(1)?;
             let vector = vector_from_blob(&blob).map_err(|message| {
                 rusqlite::Error::FromSqlConversionFailure(
-                    12,
+                    1,
                     Type::Blob,
                     Box::new(io::Error::new(io::ErrorKind::InvalidData, message)),
                 )
             })?;
+            let norm = row
+                .get::<_, Option<f32>>(2)?
+                .unwrap_or_else(|| vector_norm(&vector));
 
-            Ok(StoredEmbedding {
-                unit: CodeUnit {
-                    id: row.get(0)?,
-                    file_path: row.get(1)?,
-                    start_line: row.get(2)?,
-                    end_line: row.get(3)?,
-                    start_byte: row.get::<_, u64>(4)? as usize,
-                    end_byte: row.get::<_, u64>(5)? as usize,
-                    unit_type: row.get(6)?,
-                    name: row.get(7)?,
-                    source: row.get(8)?,
-                    source_hash: row.get(9)?,
-                    language: row.get(10)?,
-                    parser_key: row.get(11)?,
-                },
+            Ok(StoredEmbeddingCandidate {
+                unit_id: row.get(0)?,
                 vector,
+                norm,
+            })
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn code_units_by_ids(&self, ids: &[String]) -> Result<Vec<CodeUnit>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.lock()?;
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut stmt = conn.prepare(&format!(
+            r#"
+            SELECT
+                id, file_path, start_line, end_line, start_byte, end_byte,
+                unit_type, name, source, source_hash, language, parser_key
+            FROM code_units
+            WHERE id IN ({placeholders})
+            "#
+        ))?;
+        let rows = stmt.query_map(params_from_iter(ids.iter()), |row| {
+            Ok(CodeUnit {
+                id: row.get(0)?,
+                file_path: row.get(1)?,
+                start_line: row.get(2)?,
+                end_line: row.get(3)?,
+                start_byte: row.get::<_, u64>(4)? as usize,
+                end_byte: row.get::<_, u64>(5)? as usize,
+                unit_type: row.get(6)?,
+                name: row.get(7)?,
+                source: row.get(8)?,
+                source_hash: row.get(9)?,
+                language: row.get(10)?,
+                parser_key: row.get(11)?,
             })
         })?;
 
@@ -871,6 +960,38 @@ mod tests {
     }
 
     #[test]
+    fn store_open_backfills_missing_embedding_norms() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("smahties.sqlite");
+        let store = Store::open(&db_path).unwrap();
+        let unit = code_unit("src/lib.rs", "unit-1");
+        store
+            .replace_file_units(
+                "src/lib.rs",
+                "hash",
+                "parser",
+                &[unit],
+                "model",
+                &[vec![3.0, 4.0]],
+            )
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .execute("UPDATE embeddings SET norm = NULL", [])
+            .unwrap();
+        drop(store);
+
+        let reopened = Store::open(&db_path).unwrap();
+        let candidates = reopened
+            .embedding_candidates_for_model("model", None, Some("text"))
+            .unwrap();
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].norm, 5.0);
+    }
+
+    #[test]
     fn delete_path_prefix_removes_nested_indexed_files_and_lexical_rows() {
         let dir = tempdir().unwrap();
         let store = Store::open(dir.path().join("smahties.sqlite")).unwrap();
@@ -935,11 +1056,17 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].file_path, "apps/api_v1/src/lib.rs");
 
-        let embeddings = store
-            .embeddings_for_model("model", Some("apps/api_v1"), Some("text"))
+        let candidates = store
+            .embedding_candidates_for_model("model", Some("apps/api_v1"), Some("text"))
             .unwrap();
-        assert_eq!(embeddings.len(), 1);
-        assert_eq!(embeddings[0].unit.file_path, "apps/api_v1/src/lib.rs");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].unit_id, "unit-1");
+        assert_eq!(candidates[0].norm, 1.0);
+        let units = store
+            .code_units_by_ids(&[candidates[0].unit_id.clone()])
+            .unwrap();
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].file_path, "apps/api_v1/src/lib.rs");
 
         store.delete_path_prefix("apps/api_v1").unwrap();
         let items = store

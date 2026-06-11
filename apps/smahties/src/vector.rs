@@ -17,26 +17,34 @@ pub fn vector_from_blob(blob: &[u8]) -> Result<Vec<f32>, String> {
         .collect())
 }
 
+pub fn vector_norm(vector: &[f32]) -> f32 {
+    vector.iter().map(|value| value * value).sum::<f32>().sqrt()
+}
+
 pub fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
     if left.len() != right.len() || left.is_empty() {
         return None;
     }
 
-    let mut dot = 0.0f32;
-    let mut left_norm = 0.0f32;
-    let mut right_norm = 0.0f32;
+    cosine_similarity_with_norms(left, right, vector_norm(left), vector_norm(right))
+}
 
-    for (left, right) in left.iter().zip(right) {
-        dot += left * right;
-        left_norm += left * left;
-        right_norm += right * right;
-    }
-
-    if left_norm == 0.0 || right_norm == 0.0 {
+pub fn cosine_similarity_with_norms(
+    left: &[f32],
+    right: &[f32],
+    left_norm: f32,
+    right_norm: f32,
+) -> Option<f32> {
+    if left.len() != right.len() || left.is_empty() || left_norm == 0.0 || right_norm == 0.0 {
         return None;
     }
 
-    Some(dot / (left_norm.sqrt() * right_norm.sqrt()))
+    let mut dot = 0.0f32;
+    for (left, right) in left.iter().zip(right) {
+        dot += left * right;
+    }
+
+    Some(dot / (left_norm * right_norm))
 }
 
 #[cfg(test)]
@@ -60,5 +68,16 @@ mod tests {
     #[test]
     fn cosine_similarity_rejects_dimension_mismatch() {
         assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), None);
+    }
+
+    #[test]
+    fn cosine_similarity_accepts_precomputed_norms() {
+        let left = [1.0, 2.0, 3.0];
+        let right = [1.0, 2.0, 3.0];
+        let score =
+            cosine_similarity_with_norms(&left, &right, vector_norm(&left), vector_norm(&right))
+                .unwrap();
+
+        assert!((score - 1.0).abs() < f32::EPSILON);
     }
 }
