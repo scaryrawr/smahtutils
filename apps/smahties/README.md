@@ -58,6 +58,12 @@ The scanner skips binary or non-UTF-8 files, files larger than 512 KiB, and comm
 
 Supported tree-sitter languages include TypeScript, TSX, Rust, C#, C++, C, Go, Python, Bash, CSS, Java, and Ruby. Unsupported file extensions fall back to whole-file text units.
 
+## Similarity performance
+
+Semantic ranking stores embedding vectors in SQLite and computes cosine similarity in-process. Querying uses a bounded top-K pass over minimal embedding rows, then loads full code-unit source only for selected matches.
+
+Physical SQLite sharding is only likely to help when queries can target a shard, such as a specific root, model, language, or path prefix. Unscoped semantic queries still need fanout across all relevant shards and a final top-K merge unless a vector index is added. Prefer the single local WAL database with scoped filters and indexes until measurements show file/table size or write contention is the bottleneck.
+
 ## Development
 
 ```bash

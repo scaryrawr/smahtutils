@@ -25,9 +25,10 @@ pub struct SourceFile {
 }
 
 #[derive(Clone, Debug)]
-pub struct StoredEmbedding {
-    pub unit: CodeUnit,
+pub struct StoredEmbeddingCandidate {
+    pub unit_id: String,
     pub vector: Vec<f32>,
+    pub norm: f32,
 }
 
 #[derive(Clone, Debug)]
