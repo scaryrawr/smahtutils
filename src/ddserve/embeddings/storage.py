@@ -9,6 +9,8 @@ from typing import Iterable
 
 from ddserve.cache import ensure_embedding_db_path
 
+SQLITE_BUSY_TIMEOUT_SECONDS = 30
+
 
 @dataclass(frozen=True)
 class SearchChunk:
@@ -42,7 +44,7 @@ class EmbeddingStorage:
     def __init__(self, path: str | Path) -> None:
         """Implement init."""
         self.path = Path(path)
-        self.conn = sqlite3.connect(self.path)
+        self.conn = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_SECONDS)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -52,9 +54,17 @@ class EmbeddingStorage:
 
     def _init_schema(self) -> None:
         """Implement init schema."""
+        self._create_schema()
+        self._migrate_schema()
+        self.conn.commit()
+
+    def _create_schema(self) -> None:
+        """Create current embedding storage schema."""
         self.conn.executescript(
             """
             PRAGMA foreign_keys = ON;
+            PRAGMA busy_timeout = 30000;
+            PRAGMA journal_mode = WAL;
             CREATE TABLE IF NOT EXISTS docsets (
                 slug TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -119,11 +129,12 @@ class EmbeddingStorage:
             );
             """
         )
-        self._migrate_schema()
-        self.conn.commit()
 
     def _migrate_schema(self) -> None:
         """Migrate existing embedding databases."""
+        if self.schema_requires_reset():
+            self.reset_schema()
+            return
         embedding_columns = self.table_columns("embeddings")
         if "content_hash" not in embedding_columns:
             self.conn.execute("ALTER TABLE embeddings ADD COLUMN content_hash TEXT")
@@ -140,6 +151,36 @@ class EmbeddingStorage:
             self.conn.execute("DELETE FROM annoy_indexes")
             self.conn.execute("DELETE FROM annoy_items")
 
+    def schema_requires_reset(self) -> bool:
+        """Return whether an old incompatible embedding schema must be rebuilt."""
+        pages_columns = self.table_columns("pages")
+        embeddings_columns = self.table_columns("embeddings")
+        docsets_columns = self.table_columns("docsets")
+        return (
+            not {"id", "title", "name", "path"}.issubset(pages_columns)
+            or {"page_id", "page_title", "page_name", "page_path"}.intersection(pages_columns)
+            or {"vector_encoding", "vector_hash"}.intersection(embeddings_columns)
+            or {"created_at", "updated_at"}.intersection(docsets_columns)
+        )
+
+    def reset_schema(self) -> None:
+        """Reset incompatible rebuildable embedding tables to the current schema."""
+        self.conn.executescript(
+            """
+            PRAGMA foreign_keys = OFF;
+            DROP TABLE IF EXISTS chunk_fts;
+            DROP TABLE IF EXISTS annoy_items;
+            DROP TABLE IF EXISTS annoy_indexes;
+            DROP TABLE IF EXISTS embeddings;
+            DROP TABLE IF EXISTS chunks;
+            DROP TABLE IF EXISTS pages;
+            DROP TABLE IF EXISTS docsets;
+            PRAGMA foreign_keys = ON;
+            """
+        )
+        self._create_schema()
+        self.conn.execute("VACUUM")
+
     def table_columns(self, table_name: str) -> set[str]:
         """Return table columns."""
         return {str(row["name"]) for row in self.conn.execute(f"PRAGMA table_info({table_name})")}
@@ -152,14 +193,31 @@ class EmbeddingStorage:
         model: str | None,
     ) -> None:
         """Implement replace docset chunks."""
+        try:
+            self._replace_docset_chunks_once(docset, chunks, vectors, model)
+        except sqlite3.DatabaseError as exc:
+            if not is_sqlite_malformed_error(exc):
+                raise
+            self.rebuild_chunk_fts()
+            self._replace_docset_chunks_once(docset, chunks, vectors, model)
+
+    def _replace_docset_chunks_once(
+        self,
+        docset: dict[str, object],
+        chunks: list[object],
+        vectors: list[list[float]] | None,
+        model: str | None,
+    ) -> None:
+        """Replace docset chunks without retrying FTS corruption."""
         slug = str(docset["slug"])
         with self.conn:
-            stale_chunk_ids = [
-                int(row["id"])
-                for row in self.conn.execute("SELECT id FROM chunks WHERE docset_slug = ?", (slug,))
-            ]
-            for chunk_id in stale_chunk_ids:
-                self.conn.execute("DELETE FROM chunk_fts WHERE rowid = ?", (chunk_id,))
+            self.conn.execute(
+                """
+                DELETE FROM chunk_fts
+                WHERE rowid IN (SELECT id FROM chunks WHERE docset_slug = ?)
+                """,
+                (slug,),
+            )
             self.conn.execute("DELETE FROM docsets WHERE slug = ?", (slug,))
             self.conn.execute(
                 """
@@ -229,6 +287,26 @@ class EmbeddingStorage:
                     )
             self.conn.execute("DELETE FROM annoy_indexes")
             self.conn.execute("DELETE FROM annoy_items")
+
+    def rebuild_chunk_fts(self) -> None:
+        """Rebuild the chunk FTS side table from authoritative chunks."""
+        with self.conn:
+            self.conn.execute("DROP TABLE IF EXISTS chunk_fts")
+            self.conn.execute(
+                """
+                CREATE VIRTUAL TABLE chunk_fts USING fts5(
+                    text,
+                    content='chunks',
+                    content_rowid='id'
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                INSERT INTO chunk_fts(rowid, text)
+                SELECT id, text FROM chunks
+                """
+            )
 
     def docset_embeddings_current(self, slug: str, chunks: list[object], model: str) -> bool:
         """Return whether stored embeddings match prepared chunks."""
@@ -474,6 +552,11 @@ class EmbeddingStorage:
 def open_embedding_storage(cache_root: str | Path) -> EmbeddingStorage:
     """Implement open embedding storage."""
     return EmbeddingStorage(ensure_embedding_db_path(cache_root))
+
+
+def is_sqlite_malformed_error(exc: sqlite3.DatabaseError) -> bool:
+    """Return whether SQLite reported corrupt storage."""
+    return "malformed" in str(exc).lower()
 
 
 def row_to_search_chunk(row: sqlite3.Row, vector: list[float] | None) -> SearchChunk:

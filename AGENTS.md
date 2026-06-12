@@ -32,6 +32,8 @@ For `ddserve`, keep generated DevDocs cache content outside the repository under
 
 For `ddserve` semantic search performance, keep SQLite authoritative and Annoy rebuildable under the cache embeddings directory. Search should ask Annoy for bounded candidate chunk IDs, load those vectors from SQLite, then exact-score candidates; preserve keyword fallback and slug/language filters.
 
+For `ddserve docs update` and embedding refresh throughput, keep chunk/request sizing bounded and embedding concurrency explicit and conservative. Prefer request-aware batching by input count and bytes, bounded async embedding calls instead of unbounded task fan-out, SQLite WAL plus busy timeout for concurrent readers with serialized writes, and one deferred Annoy rebuild after multi-docset updates rather than rebuilding after every docset.
+
 When building any FTS5 `MATCH` query from user input (e.g. the `ddserve` keyword fallback), sanitize each term to alphanumeric/`_` prefix tokens before appending `*`, as `smahties.service.build_fts_query` does. Raw terms containing FTS5 operators (`+`, `-`, `"`, `(`, `)`, `:`) raise `sqlite3.OperationalError` on common queries like `c++`; cover this with a test using such characters.
 
 For `smahties` language support, prefer direct upstream tree-sitter grammar packages and pin them through `uv.lock`; unsupported extensions fall back to whole-file text units.

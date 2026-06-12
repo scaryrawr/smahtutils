@@ -39,7 +39,11 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
               "enabled": true,
               "batch-size": 8,
               "max-chunk-chars": 1200,
-              "overlap-chars": 100
+              "min-chunk-chars": 120,
+              "overlap-chars": 100,
+              "max-chunks-per-page": 64,
+              "max-request-bytes": 4096,
+              "max-concurrent-requests": 3
             },
             "serve": {
               "bind-address": "127.0.0.1",
@@ -65,7 +69,11 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
                 enabled=True,
                 batch_size=8,
                 max_chunk_chars=1200,
+                min_chunk_chars=120,
                 overlap_chars=100,
+                max_chunks_per_page=64,
+                max_request_bytes=4096,
+                max_concurrent_requests=3,
             ),
             serve=DdserveServeSettings(
                 bind_address="127.0.0.1",

@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,8 +28,10 @@ from .devdocs import (
     find_docset,
     get_available_docsets,
 )
+from .embeddings.annoy_index import AnnoyIndexManager
 from .embeddings.index import refresh_docset_embeddings
-from .embeddings.openai import EmbeddingClient
+from .embeddings.openai import AsyncEmbeddingClient, EmbeddingClient
+from .embeddings.storage import open_embedding_storage
 from .errors import DdserveError, get_error_message
 from .http import FetchHttpClient, HttpClient
 from .models import (
@@ -45,6 +47,7 @@ from .models import (
 from .text import extract_markdown_pages
 
 InstallProgressCallback = Callable[[str, int, int, str, object | None], None]
+EmbeddingProgressCallback = Callable[[int, int], None]
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,10 @@ class InstallResult:
     pages: int
     skipped_entries: int
     warnings: list[str]
+    embedding_chunks: int = 0
+    embedded_chunks: int = 0
+    skipped_embedding_chunks: int = 0
+    annoy_indexed: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,6 +86,9 @@ def install_docset(
     config: DdserveConfig | None = None,
     env: dict[str, str] | None = None,
     embedding_client: EmbeddingClient | None = None,
+    async_embedding_client: AsyncEmbeddingClient | None = None,
+    ensure_annoy: bool = True,
+    on_embedding_progress: EmbeddingProgressCallback | None = None,
 ) -> InstallResult:
     """Implement install docset."""
     assert_safe_path_segment(slug, "docset slug")
@@ -93,8 +103,16 @@ def install_docset(
     existing = read_docset_manifest(cache_root, slug)
     if not force and is_current(existing, summary):
         warnings = [*available.warnings]
-        refresh_embeddings_for_installed_docset(
-            cache_root, existing, resolved_config, warnings, env, embedding_client
+        embedding_result = refresh_embeddings_for_installed_docset(
+            cache_root,
+            existing,
+            resolved_config,
+            warnings,
+            env,
+            embedding_client,
+            async_embedding_client,
+            ensure_annoy,
+            on_embedding_progress,
         )
         return InstallResult(
             slug=slug,
@@ -103,6 +121,10 @@ def install_docset(
             pages=len(existing.pages),
             skipped_entries=existing.skipped_entries,
             warnings=warnings,
+            embedding_chunks=embedding_result["chunks"],
+            embedded_chunks=embedding_result["embedded"],
+            skipped_embedding_chunks=embedding_result.get("skipped", 0),
+            annoy_indexed=bool(embedding_result.get("annoy", 0)),
         )
     lock = acquire_docset_lock(cache_root, slug)
     stage_dir = (
@@ -172,8 +194,16 @@ def install_docset(
         replace_directory(stage_dir, paths.docs_root / slug)
         update_top_level_manifest(cache_root, manifest)
         warnings = [*available.warnings]
-        refresh_embeddings_for_installed_docset(
-            cache_root, manifest, resolved_config, warnings, env, embedding_client
+        embedding_result = refresh_embeddings_for_installed_docset(
+            cache_root,
+            manifest,
+            resolved_config,
+            warnings,
+            env,
+            embedding_client,
+            async_embedding_client,
+            ensure_annoy,
+            on_embedding_progress,
         )
         return InstallResult(
             slug=slug,
@@ -182,6 +212,10 @@ def install_docset(
             pages=len(pages),
             skipped_entries=manifest.skipped_entries,
             warnings=warnings,
+            embedding_chunks=embedding_result["chunks"],
+            embedded_chunks=embedding_result["embedded"],
+            skipped_embedding_chunks=embedding_result.get("skipped", 0),
+            annoy_indexed=bool(embedding_result.get("annoy", 0)),
         )
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
@@ -200,7 +234,18 @@ def install_docsets(
     for index, slug in enumerate(slugs, start=1):
         if on_progress:
             on_progress(slug, index, total, "start", None)
-        result = install_docset(slug, cache_root, **kwargs)
+        install_kwargs = dict(kwargs)
+        if on_progress:
+            install_kwargs["on_embedding_progress"] = (
+                lambda completed, batches, current_slug=slug, current_index=index: on_progress(
+                    current_slug,
+                    current_index,
+                    total,
+                    "embedding",
+                    {"completed": completed, "total": batches},
+                )
+            )
+        result = install_docset(slug, cache_root, **install_kwargs)
         if on_progress:
             on_progress(slug, index, total, "done", result)
         results.append(result)
@@ -217,21 +262,51 @@ def update_docsets(
     if slug:
         if on_progress:
             on_progress(slug, 1, 1, "start", None)
-        result = install_docset(slug, cache_root, **kwargs)
+        install_kwargs = dict(kwargs)
+        if on_progress:
+            install_kwargs["on_embedding_progress"] = lambda completed, batches: on_progress(
+                slug, 1, 1, "embedding", {"completed": completed, "total": batches}
+            )
+        result = install_docset(slug, cache_root, **install_kwargs)
         if on_progress:
             on_progress(slug, 1, 1, "done", result)
         return [result]
     manifest = read_cache_manifest(cache_root)
     slugs = sorted(manifest.docs)
+    if not slugs:
+        return []
+    resolved_config = resolve_update_config(kwargs)
+    defer_annoy = (
+        len(slugs) > 1 and resolved_config.embeddings.enabled and resolved_config.openai is not None
+    )
+    install_kwargs = dict(kwargs)
+    install_kwargs["config"] = resolved_config
+    if defer_annoy:
+        install_kwargs["ensure_annoy"] = False
     results: list[InstallResult] = []
     total = len(slugs)
     for index, installed_slug in enumerate(slugs, start=1):
         if on_progress:
             on_progress(installed_slug, index, total, "start", None)
-        result = install_docset(installed_slug, cache_root, **kwargs)
+        per_doc_kwargs = dict(install_kwargs)
+        if on_progress:
+            per_doc_kwargs["on_embedding_progress"] = (
+                lambda completed, batches, current_slug=installed_slug, current_index=index: (
+                    on_progress(
+                        current_slug,
+                        current_index,
+                        total,
+                        "embedding",
+                        {"completed": completed, "total": batches},
+                    )
+                )
+            )
+        result = install_docset(installed_slug, cache_root, **per_doc_kwargs)
         if on_progress:
             on_progress(installed_slug, index, total, "done", result)
         results.append(result)
+    if defer_annoy:
+        results = ensure_deferred_annoy_index(cache_root, resolved_config, results)
     return results
 
 
@@ -258,6 +333,42 @@ def remove_docset(slug: str, cache_root: str) -> RemoveResult:
         lock.release()
 
 
+def resolve_update_config(kwargs: dict[str, object]) -> DdserveConfig:
+    """Resolve docs update config once for a multi-docset run."""
+    config = kwargs.get("config")
+    if isinstance(config, DdserveConfig):
+        return config
+    config_path = kwargs.get("config_path")
+    env = kwargs.get("env")
+    return load_config(
+        config_path if isinstance(config_path, str) else None,
+        env if isinstance(env, dict) else None,
+    ).config
+
+
+def ensure_deferred_annoy_index(
+    cache_root: str,
+    config: DdserveConfig,
+    results: list[InstallResult],
+) -> list[InstallResult]:
+    """Build the Annoy sidecar once after a multi-docset embedding update."""
+    if config.openai is None:
+        return results
+    try:
+        storage = open_embedding_storage(cache_root)
+        try:
+            ready = AnnoyIndexManager(cache_root, storage).ensure(config.openai.embedding_model)
+        finally:
+            storage.close()
+    except Exception as exc:
+        warning = (
+            "Failed to refresh embedding search index; docs remain installed. "
+            f"{get_error_message(exc)}"
+        )
+        return [replace(result, warnings=[*result.warnings, warning]) for result in results]
+    return [replace(result, annoy_indexed=bool(ready)) for result in results]
+
+
 def is_current(existing: DocsetManifest | None, summary: object) -> bool:
     """Return whether current."""
     if (
@@ -281,14 +392,27 @@ def refresh_embeddings_for_installed_docset(
     warnings: list[str],
     env: dict[str, str] | None,
     embedding_client: EmbeddingClient | None,
-) -> None:
+    async_embedding_client: AsyncEmbeddingClient | None,
+    ensure_annoy: bool,
+    on_embedding_progress: EmbeddingProgressCallback | None,
+) -> dict[str, int]:
     """Implement refresh embeddings for installed docset."""
     try:
-        refresh_docset_embeddings(cache_root, manifest, config, env=env, client=embedding_client)
+        return refresh_docset_embeddings(
+            cache_root,
+            manifest,
+            config,
+            env=env,
+            client=embedding_client,
+            async_client=async_embedding_client,
+            ensure_annoy=ensure_annoy,
+            on_embedding_progress=on_embedding_progress,
+        )
     except Exception as exc:
         warnings.append(
             f"Failed to refresh embeddings for {manifest.slug}; docs remain installed. {get_error_message(exc)}"
         )
+        return {"chunks": 0, "embedded": 0, "skipped": 0, "annoy": 0}
 
 
 def file_manifest_entry(path: Path, manifest_file: str) -> RawFileManifestEntry:
