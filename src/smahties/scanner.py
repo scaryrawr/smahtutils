@@ -28,7 +28,24 @@ EXCLUDED_DIR_NAMES = {
     "venv",
 }
 EXCLUDED_DIR_NAME_SUFFIXES = (".egg-info", ".dist-info")
-EXCLUDED_FILE_NAMES = {".gitignore", ".ignore", ".gitattributes", ".gitmodules"}
+EXCLUDED_FILE_NAMES = {
+    ".gitignore",
+    ".ignore",
+    ".gitattributes",
+    ".gitmodules",
+    "bun.lock",
+    "bun.lockb",
+    "Cargo.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "npm-shrinkwrap.json",
+    "package-lock.json",
+    "Pipfile.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
+    "yarn.lock",
+}
 
 
 class Scanner:

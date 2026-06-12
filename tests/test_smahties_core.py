@@ -47,11 +47,13 @@ def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
     dependency = venv / "dependency.py"
     bytecode = cache / "lib.pyc"
     package_metadata = egg_info / "PKG-INFO"
+    lock_file = tmp_path / "uv.lock"
     source.write_text("fn main() {}\n", encoding="utf-8")
     ignored.write_text("fn generated() {}\n", encoding="utf-8")
     dependency.write_text("def dependency(): pass\n", encoding="utf-8")
     bytecode.write_text("cache\n", encoding="utf-8")
     package_metadata.write_text("Name: smahtutils\n", encoding="utf-8")
+    lock_file.write_text("version = 1\n", encoding="utf-8")
 
     scanner = Scanner(tmp_path)
     discovered = scanner.discover_files(tmp_path)
@@ -61,6 +63,8 @@ def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
     assert dependency not in discovered
     assert bytecode not in discovered
     assert package_metadata not in discovered
+    assert lock_file not in discovered
+    assert scanner.read_source(lock_file) is None
 
 
 def test_scanner_skips_gitignored_paths(tmp_path: Path) -> None:
