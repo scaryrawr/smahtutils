@@ -17,6 +17,7 @@ from .models import (
     QueuedWork,
     StoreStats,
     StoredEmbeddingCandidate,
+    StoredCodeUnitEmbedding,
 )
 from .vector import vector_from_blob, vector_norm, vector_to_blob
 
@@ -572,6 +573,47 @@ class Store:
         return [
             StoredEmbeddingCandidate(
                 row["unit_id"], vector_from_blob(row["vector"]), float(row["norm"])
+            )
+            for row in rows
+        ]
+
+    def code_unit_embeddings_for_model(
+        self,
+        model: str,
+        path_prefixes: Iterable[str | None],
+        language: str | None,
+    ) -> list[StoredCodeUnitEmbedding]:
+        """Load code units and embeddings for duplicate detection."""
+
+        clauses = ["e.model = ?"]
+        params: list[object] = [model]
+        prefixes = [prefix for prefix in dict.fromkeys(path_prefixes) if prefix]
+        if prefixes:
+            prefix_clauses = []
+            for prefix in prefixes:
+                prefix_clauses.append(path_prefix_clause("u.file_path"))
+                params.extend(path_prefix_params(prefix))
+            clauses.append(f"({' OR '.join(prefix_clauses)})")
+        if language:
+            clauses.append("u.language = ?")
+            params.append(language)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT
+                    u.id, u.file_path, u.start_line, u.end_line, u.start_byte, u.end_byte,
+                    u.unit_type, u.name, u.source, u.source_hash, u.language, u.parser_key,
+                    e.vector, e.norm
+                FROM code_units u
+                JOIN embeddings e ON e.unit_id = u.id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY u.file_path, u.start_line, u.end_line, u.id
+                """,
+                params,
+            ).fetchall()
+        return [
+            StoredCodeUnitEmbedding(
+                _code_unit_from_row(row), vector_from_blob(row["vector"]), float(row["norm"])
             )
             for row in rows
         ]

@@ -6,9 +6,9 @@ This Python project uses `uv` and a root `pyproject.toml`:
 
 - `src/ddserve` — DevDocs mirror/search/server app. `cli.py` dispatches `cache`, `sources`, `docs`, `embeddings`, `search`, `serve`, and `config`; `config.py` derives runtime settings from shared `wickedsmaht_config`; `cache.py` resolves `DDSERVE_CACHE_DIR`, XDG cache, and manifest/lock paths; `install.py` downloads DevDocs JSON and writes Markdown pages; `embeddings` uses SQLite as the authoritative chunk/vector store with Annoy sidecar indexes for semantic search; `server.py` exposes read-only REST, MCP, and Copilot hook endpoints.
 - `src/wickedpaste` — clipboard-to-LLM converter. `cli.py` resolves CLI/config and calls the official `openai` package; `clipboard.py` reads image first, then text.
-- `src/smahties` — semantic code-search/RAG MCP stdio service. `cli.py` opens `<root>/.smahties/smahties.sqlite`, starts indexing, and serves MCP. `mcp_server.py` exposes `query_code`, `index_path`, `status`, and `list_indexed`; `scanner`/`parser`/`indexer`/`watcher` handle discovery, code-unit extraction, embeddings, and live updates.
+- `src/smahties` — semantic code-search/RAG MCP stdio service plus duplicate-code reporting. `cli.py` opens `<root>/.smahties/smahties.sqlite`, starts indexing, serves MCP, and exposes `smahties duplicates`; `duplicates.py` produces Codigami-compatible reports from stored embeddings. `mcp_server.py` exposes `query_code`, `index_path`, `status`, and `list_indexed`; `scanner`/`parser`/`indexer`/`watcher` handle discovery, code-unit extraction, embeddings, and live updates.
 - `src/wickedsmaht_config` — shared `$HOME/.wickedsmaht/config.json` loader and CLI-over-config fallback logic. Keys: `base_url`, `model`, `text_embedding_model`, `coding_embedding_model`, plus optional `ddserve` app-specific settings (kebab-case aliases accepted).
-- `tests` — unit tests for config, ddserve config/cache/install/search/server helpers, scanner/parser behavior, SQLite store behavior, Annoy indexing, vector helpers, and clipboard image encoding.
+- `tests` — unit tests for config, ddserve config/cache/install/search/server helpers, scanner/parser behavior, SQLite store behavior, Annoy indexing, duplicate detection, vector helpers, and clipboard image encoding.
 
 ## Build, Test, and Development Commands
 
@@ -22,6 +22,7 @@ Run from the repository root.
 - `uv run ddserve cache path` — show the DevDocs cache root; `uv run ddserve docs install <slug...>` installs DevDocs docsets; `uv run ddserve serve --host 127.0.0.1 --port 43877` serves read-only docs APIs.
 - `uv run wickedpaste --base-url http://127.0.0.1:14892/v1 --model <model>` — convert current clipboard; flags may be omitted when config supplies them.
 - `uv run smahties --base-url http://127.0.0.1:14892/v1 --coding-embedding-model <embedding-model>` — run MCP stdio for the current directory. `.mcp.json` invokes `uv run smahties` and relies on config.
+- `uv run smahties duplicates --threshold 0.92 --level function` — find duplicate code using the existing `.smahties` index and embedding config.
 
 ## Coding Style & Naming Conventions
 
@@ -36,6 +37,8 @@ When building any FTS5 `MATCH` query from user input (e.g. the `ddserve` keyword
 For `smahties` language support, prefer direct upstream tree-sitter grammar packages and pin them through `uv.lock`; unsupported extensions fall back to whole-file text units.
 
 For `smahties` similarity/query performance, keep SQLite as the authoritative store and Annoy as a rebuildable sidecar index. Store vectors and metadata in SQLite, query Annoy for bounded candidates, then exact-score only those candidates plus any required lexical matches. Physical SQLite sharding only helps when queries can target a subset; unscoped semantic search still requires fanout/merge unless a vector index is added.
+
+For `smahties duplicates`, preserve Codigami-compatible JSON output and keep `.smahties/smahties.sqlite` as the single index. Function/class levels use stored code-unit embeddings with Annoy candidate retrieval plus exact scoring; `--level file` creates transient whole-file embeddings for that run.
 
 ## Testing Guidelines
 

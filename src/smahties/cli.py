@@ -6,6 +6,12 @@ import json
 from pathlib import Path
 
 from .app import build_state, start_mcp_state
+from .duplicates import (
+    DEFAULT_DUPLICATE_THRESHOLD,
+    duplicate_code,
+    parse_comparison_levels,
+    parse_threshold,
+)
 from .mcp_server import serve
 from .models import QueryMode
 from .serialization import to_jsonable
@@ -24,7 +30,7 @@ async def async_main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     command = args.command
-    api_required = command in {None, "index"} or (
+    api_required = command in {None, "index", "duplicates"} or (
         command == "query" and args.mode != QueryMode.KEYWORD.value
     )
     state = build_state(Path(args.root), args.base_url, args.coding_embedding_model, api_required)
@@ -39,6 +45,22 @@ async def async_main() -> None:
             args.language,
         )
         print_json_or_query(response, args.json)
+        return
+    if command == "duplicates":
+        try:
+            threshold = parse_threshold(args.threshold)
+            levels = parse_comparison_levels(args.level)
+        except ValueError as exc:
+            parser.error(str(exc))
+        for requested_path in args.path:
+            await index_path(state, requested_path)
+        await state.indexer.run_until_idle_or_interrupt()
+        response = await duplicate_code(state, args.path, threshold, levels, args.language)
+        output = json.dumps(to_jsonable(response), indent=2)
+        if args.output:
+            Path(args.output).write_text(output, encoding="utf-8")
+        else:
+            print(output)
         return
     if command == "index":
         await index_path(state, str(args.path))
@@ -115,6 +137,23 @@ def build_parser() -> argparse.ArgumentParser:
     list_indexed_parser.add_argument("--offset", type=int)
     list_indexed_parser.add_argument("--include-source", action="store_true")
     list_indexed_parser.add_argument("--json", action="store_true")
+
+    duplicates = subparsers.add_parser("duplicates")
+    duplicates.add_argument("path", nargs="*", default=["."])
+    duplicates.add_argument(
+        "--threshold",
+        "-t",
+        default=str(DEFAULT_DUPLICATE_THRESHOLD),
+        help=f"Similarity threshold from 0.0 to 1.0 (default: {DEFAULT_DUPLICATE_THRESHOLD}).",
+    )
+    duplicates.add_argument(
+        "--level",
+        "-l",
+        action="append",
+        help="Compare function, class, or file units; repeat or comma-separate.",
+    )
+    duplicates.add_argument("--language")
+    duplicates.add_argument("--output", "-o")
 
     return parser
 
