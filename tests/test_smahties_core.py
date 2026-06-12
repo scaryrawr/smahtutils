@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from smahties.context import RuntimeContext
 from smahties.embedding import EmbeddingBatchLimits, embedding_batch_ranges
@@ -55,6 +59,29 @@ def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
     assert dependency not in discovered
     assert bytecode not in discovered
     assert package_metadata not in discovered
+
+
+def test_scanner_skips_gitignored_paths(tmp_path: Path) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git is required for gitignore filtering")
+
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("ignored-dir/\n*.log\n", encoding="utf-8")
+    source = tmp_path / "src.py"
+    ignored_source = tmp_path / "ignored-dir" / "generated.py"
+    ignored_log = tmp_path / "debug.log"
+    ignored_source.parent.mkdir()
+    source.write_text("def main(): pass\n", encoding="utf-8")
+    ignored_source.write_text("def generated(): pass\n", encoding="utf-8")
+    ignored_log.write_text("debug\n", encoding="utf-8")
+
+    scanner = Scanner(tmp_path)
+    discovered = scanner.discover_files(tmp_path)
+
+    assert source in discovered
+    assert ignored_source not in discovered
+    assert ignored_log not in discovered
+    assert scanner.read_source(ignored_source) is None
 
 
 def test_state_dir_contains_gitignore(tmp_path: Path) -> None:

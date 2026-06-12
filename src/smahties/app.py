@@ -33,6 +33,7 @@ def build_state(
     for excluded_file in EXCLUDED_FILE_NAMES:
         store.delete_file_name(excluded_file)
     scanner = Scanner(context.storage_root)
+    purge_non_indexable_files(store, scanner)
     embedder = OpenAiEmbedder(resolved_base_url, model)
     indexer = Indexer(scanner, ParserRegistry(), store, embedder)
     annoy = AnnoyIndexManager(state_dir, store)
@@ -71,3 +72,11 @@ async def start_mcp_state(state: AppState) -> PollingWatcher | None:
         await state.indexer.enqueue_path(auto_index_root, Priority.LOW)
         return start(auto_index_root, state.indexer)
     return None
+
+
+def purge_non_indexable_files(store: Store, scanner: Scanner) -> None:
+    """Delete indexed files that current scanner rules would now skip."""
+
+    for path in store.file_paths():
+        if not scanner.is_indexable_path(scanner.root / path):
+            store.delete_file(path)

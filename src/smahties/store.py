@@ -487,6 +487,13 @@ class Store:
             [FileError(row["path"], row["error"]) for row in errors],
         )
 
+    def file_paths(self) -> list[str]:
+        """Return indexed file paths tracked by the store."""
+
+        with self._lock:
+            rows = self._conn.execute("SELECT path FROM files ORDER BY path").fetchall()
+        return [row["path"] for row in rows]
+
     def lexical_search(
         self,
         query: str,
