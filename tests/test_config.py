@@ -4,7 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from wickedsmaht_config import Config, SettingError, config_path_from_home, resolve_setting
+from wickedsmaht_config import (
+    Config,
+    DdserveAuthSettings,
+    DdserveEmbeddingSettings,
+    DdserveServeSettings,
+    DdserveSettings,
+    SettingError,
+    config_path_from_home,
+    resolve_setting,
+)
 
 
 def test_config_path_uses_wickedsmaht_directory() -> None:
@@ -22,7 +31,24 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
         {
           "base-url": "http://127.0.0.1:14892/v1",
           "model": "chat",
-          "coding-embedding-model": "embed"
+          "text-embedding-model": "text-embed",
+          "coding-embedding-model": "embed",
+          "ddserve": {
+            "api-key-env": "DOCS_API_KEY",
+            "embeddings": {
+              "enabled": true,
+              "batch-size": 8,
+              "max-chunk-chars": 1200,
+              "overlap-chars": 100
+            },
+            "serve": {
+              "bind-address": "127.0.0.1",
+              "port": 43877,
+              "auth": {
+                "token-env": "DDSERVE_TOKEN"
+              }
+            }
+          }
         }
         """,
         encoding="utf-8",
@@ -31,7 +57,22 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
     assert Config.load_from_path(path) == Config(
         base_url="http://127.0.0.1:14892/v1",
         model="chat",
+        text_embedding_model="text-embed",
         coding_embedding_model="embed",
+        ddserve=DdserveSettings(
+            api_key_env="DOCS_API_KEY",
+            embeddings=DdserveEmbeddingSettings(
+                enabled=True,
+                batch_size=8,
+                max_chunk_chars=1200,
+                overlap_chars=100,
+            ),
+            serve=DdserveServeSettings(
+                bind_address="127.0.0.1",
+                port=43877,
+                auth=DdserveAuthSettings(token_env="DDSERVE_TOKEN"),
+            ),
+        ),
     )
 
 

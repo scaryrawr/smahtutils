@@ -8,6 +8,7 @@ These are mostly vibe-coded tools for personal development workflows. They work 
 
 | Path | Purpose |
 | --- | --- |
+| `src/ddserve` | Mirrors DevDocs docsets into a local Markdown cache, indexes docs with embeddings, searches cached docs, and serves read-only REST/MCP/hook endpoints. |
 | `src/wickedpaste` | Reads the system clipboard, prefers images over text, and asks an OpenAI-compatible chat model to return HTML and GitHub Flavored Markdown. |
 | `src/smahties` | Runs a local semantic code-search MCP stdio server with indexing, code-unit extraction, embeddings, Annoy vector search, keyword/hybrid query support, and duplicate-code reports. |
 | `src/wickedsmaht_config` | Loads shared defaults from `$HOME/.wickedsmaht/config.json` and resolves CLI values over config values. |
@@ -19,6 +20,7 @@ These are mostly vibe-coded tools for personal development workflows. They work 
 - `uv` for dependency locking and command execution.
 - An OpenAI-compatible API endpoint for chat completions, embeddings, or both, depending on which app you run.
 - Clipboard access for `wickedpaste`.
+- Network access to DevDocs for installing or updating `ddserve` docsets.
 
 Runtime dependencies are intentionally narrow and pinned through `uv.lock`: the official `openai` package, Spotify `annoy`, the official `mcp` package, direct tree-sitter grammar packages, and `pillow` for image clipboard support.
 
@@ -30,11 +32,24 @@ Both apps can read defaults from `$HOME/.wickedsmaht/config.json`:
 {
   "base_url": "http://127.0.0.1:14892/v1",
   "model": "my-chat-model",
-  "coding_embedding_model": "my-embedding-model"
+  "text_embedding_model": "my-text-embedding-model",
+  "coding_embedding_model": "my-code-embedding-model",
+  "ddserve": {
+    "embeddings": {
+      "enabled": true,
+      "batch_size": 64,
+      "max_chunk_chars": 2400,
+      "overlap_chars": 200
+    },
+    "serve": {
+      "bind_address": "127.0.0.1",
+      "port": 43877
+    }
+  }
 }
 ```
 
-CLI flags override config values. Kebab-case aliases such as `base-url` and `coding-embedding-model` are accepted in the config file.
+CLI flags override config values. Kebab-case aliases such as `base-url`, `text-embedding-model`, `coding-embedding-model`, and `ddserve.embeddings.max-chunk-chars` are accepted in the config file.
 
 ## Common commands
 
@@ -45,6 +60,17 @@ uv sync --locked --all-groups
 uv run ruff format --check .
 uv run ruff check .
 uv run pytest
+```
+
+Run `ddserve` against the default cache:
+
+```bash
+uv run ddserve cache path
+uv run ddserve docs available
+uv run ddserve docs install http css
+uv run ddserve embeddings refresh http
+uv run ddserve search "request headers" --slug http
+uv run ddserve serve --host 127.0.0.1 --port 43877
 ```
 
 Run `wickedpaste` against explicit settings:
@@ -73,6 +99,12 @@ uv run smahties duplicates src --threshold 0.85 --level function,class
 ```
 
 Use `--root <path>` to serve or query a different local coding directory.
+
+## `ddserve` behavior
+
+`ddserve` stores its cache under `DDSERVE_CACHE_DIR`, `$XDG_CACHE_HOME/ddserve`, or `~/.cache/ddserve`. Configuration is read from shared `$HOME/.wickedsmaht/config.json`; `--config` may point at an alternate shared config file. Documentation embeddings use `base_url` and `text_embedding_model`, never `coding_embedding_model`. App-specific settings live under the optional `ddserve` object.
+
+The Python app supports the core runtime/server surface from the original TypeScript app: DevDocs source listing, install/update/remove, Markdown page extraction, embedding refresh/rebuild/status, Annoy-accelerated semantic search with keyword fallback, a read-only REST API, a minimal MCP HTTP endpoint, and a Copilot `sessionStart` hook endpoint. Repo-level Copilot plugin manifests are intentionally not installed into this repository so they do not conflict with the existing `smahties` MCP configuration.
 
 ## `smahties` indexing and search
 
