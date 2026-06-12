@@ -29,7 +29,7 @@ def build_state(
     resolved_base_url, model = resolve_api_settings(base_url, coding_embedding_model, api_required)
     store = Store(state_dir / "smahties.sqlite")
     for excluded_dir in EXCLUDED_DIR_NAMES:
-        store.delete_path_prefix(excluded_dir)
+        store.delete_path_part(excluded_dir)
     for excluded_file in EXCLUDED_FILE_NAMES:
         store.delete_file_name(excluded_file)
     scanner = Scanner(context.storage_root)

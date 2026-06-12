@@ -290,17 +290,30 @@ class Store:
                 path_prefix_params(prefix),
             )
 
+    def delete_path_part(self, part: str) -> None:
+        """Delete indexed state for files with a matching path component."""
+
+        with self._lock, self._conn:
+            self._conn.execute(
+                f"DELETE FROM code_units_fts WHERE {path_part_clause('file_path')}",
+                path_part_params(part),
+            )
+            self._conn.execute(
+                f"DELETE FROM files WHERE {path_part_clause('path')}",
+                path_part_params(part),
+            )
+
     def delete_file_name(self, file_name: str) -> None:
         """Delete indexed state for files matching an excluded file name."""
 
         with self._lock, self._conn:
             self._conn.execute(
-                "DELETE FROM code_units_fts WHERE file_path = ? OR file_path LIKE ?",
-                (file_name, f"%/{file_name}"),
+                f"DELETE FROM code_units_fts WHERE {path_terminal_part_clause('file_path')}",
+                path_terminal_part_params(file_name),
             )
             self._conn.execute(
-                "DELETE FROM files WHERE path = ? OR path LIKE ?",
-                (file_name, f"%/{file_name}"),
+                f"DELETE FROM files WHERE {path_terminal_part_clause('path')}",
+                path_terminal_part_params(file_name),
             )
 
     def enqueue_work(self, path: Path, priority: Priority, delete: bool) -> None:
@@ -696,6 +709,35 @@ def path_prefix_params(prefix: str) -> tuple[str, str, str]:
     """Return repeated parameters for path_prefix_clause."""
 
     return (prefix, prefix, prefix)
+
+
+def path_part_clause(column: str) -> str:
+    """Return a SQL fragment for literal path component matching."""
+
+    return (
+        f"({column} = ? "
+        f"OR substr({column}, 1, length(?) + 1) = ? || '/' "
+        f"OR substr({column}, -length(?) - 1) = '/' || ? "
+        f"OR instr({column}, '/' || ? || '/') > 0)"
+    )
+
+
+def path_part_params(part: str) -> tuple[str, str, str, str, str, str]:
+    """Return repeated parameters for path_part_clause."""
+
+    return (part, part, part, part, part, part)
+
+
+def path_terminal_part_clause(column: str) -> str:
+    """Return a SQL fragment for matching a literal final path component."""
+
+    return f"({column} = ? OR substr({column}, -length(?) - 1) = '/' || ?)"
+
+
+def path_terminal_part_params(part: str) -> tuple[str, str, str]:
+    """Return repeated parameters for path_terminal_part_clause."""
+
+    return (part, part, part)
 
 
 def unix_now() -> int:

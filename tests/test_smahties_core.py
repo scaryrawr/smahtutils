@@ -28,16 +28,33 @@ def test_embedding_batches_are_limited() -> None:
 def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
     src = tmp_path / "src"
     target = tmp_path / "target"
+    venv = tmp_path / ".venv"
+    cache = src / "__pycache__"
+    egg_info = src / "smahtutils.egg-info"
     src.mkdir()
     target.mkdir()
+    venv.mkdir()
+    cache.mkdir()
+    egg_info.mkdir()
     source = src / "lib.rs"
     ignored = target / "generated.rs"
+    dependency = venv / "dependency.py"
+    bytecode = cache / "lib.pyc"
+    package_metadata = egg_info / "PKG-INFO"
     source.write_text("fn main() {}\n", encoding="utf-8")
     ignored.write_text("fn generated() {}\n", encoding="utf-8")
+    dependency.write_text("def dependency(): pass\n", encoding="utf-8")
+    bytecode.write_text("cache\n", encoding="utf-8")
+    package_metadata.write_text("Name: smahtutils\n", encoding="utf-8")
 
     scanner = Scanner(tmp_path)
-    assert source in scanner.discover_files(tmp_path)
-    assert ignored not in scanner.discover_files(tmp_path)
+    discovered = scanner.discover_files(tmp_path)
+
+    assert source in discovered
+    assert ignored not in discovered
+    assert dependency not in discovered
+    assert bytecode not in discovered
+    assert package_metadata not in discovered
 
 
 def test_state_dir_contains_gitignore(tmp_path: Path) -> None:

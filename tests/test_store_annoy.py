@@ -74,6 +74,19 @@ def test_path_prefix_filters_treat_wildcards_literally(tmp_path: Path) -> None:
     ]
 
 
+def test_delete_path_part_removes_nested_excluded_dirs(tmp_path: Path) -> None:
+    store = Store(tmp_path / "smahties.sqlite")
+    cached = code_unit("cached", "cache", "cache", "src/__pycache__/module.pyc")
+    source = code_unit("source", "def main(): pass", "main", "src/main.py")
+    store.replace_file_units(cached.file_path, "hash-cached", "parser", [cached], "model", [[1.0]])
+    store.replace_file_units(source.file_path, "hash-source", "parser", [source], "model", [[1.0]])
+
+    store.delete_path_part("__pycache__")
+
+    assert store.code_units_by_ids(["cached"]) == []
+    assert [unit.file_path for unit in store.code_units_by_ids(["source"])] == ["src/main.py"]
+
+
 def code_unit(id_: str, source: str, name: str, file_path: str = "src/lib.rs") -> CodeUnit:
     return CodeUnit(
         id=id_,

@@ -7,7 +7,26 @@ from pathlib import Path
 from .models import SourceFile
 
 DEFAULT_MAX_FILE_BYTES = 512 * 1024
-EXCLUDED_DIR_NAMES = {".git", ".smahties", "target", "node_modules", ".next", ".turbo"}
+EXCLUDED_DIR_NAMES = {
+    ".git",
+    ".mypy_cache",
+    ".next",
+    ".nox",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".smahties",
+    ".tox",
+    ".turbo",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "env",
+    "node_modules",
+    "target",
+    "venv",
+}
+EXCLUDED_DIR_NAME_SUFFIXES = (".egg-info", ".dist-info")
 EXCLUDED_FILE_NAMES = {".gitignore", ".ignore", ".gitattributes", ".gitmodules"}
 
 
@@ -34,7 +53,7 @@ class Scanner:
             dir_names[:] = [
                 name
                 for name in dir_names
-                if name not in EXCLUDED_DIR_NAMES
+                if not is_excluded_dir_name(name)
                 and not is_excluded_path(self.root, current_path / name)
             ]
             for file_name in file_names:
@@ -131,4 +150,10 @@ def is_excluded_path(root: Path, path: Path) -> bool:
         relative = path.relative_to(root)
     except ValueError:
         relative = path
-    return any(part in EXCLUDED_DIR_NAMES or part in EXCLUDED_FILE_NAMES for part in relative.parts)
+    return any(is_excluded_dir_name(part) or part in EXCLUDED_FILE_NAMES for part in relative.parts)
+
+
+def is_excluded_dir_name(name: str) -> bool:
+    """Return whether a directory name is excluded from indexing."""
+
+    return name in EXCLUDED_DIR_NAMES or name.endswith(EXCLUDED_DIR_NAME_SUFFIXES)
