@@ -154,7 +154,7 @@ class Scanner:
             return set()
 
         result = subprocess.run(
-            ["git", "-C", str(self.git_root), "check-ignore", "--stdin"],
+            ["git", "-C", str(self.git_root), "check-ignore", "--no-index", "--stdin"],
             input="\n".join(relative_to_path) + "\n",
             capture_output=True,
             text=True,
