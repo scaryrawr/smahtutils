@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from ddserve.cache import read_cache_manifest, read_docset_manifest
+from ddserve.cache import cache_paths, read_cache_manifest, read_docset_manifest
 
 
 def split_filter_values(values: list[str] | None) -> list[str]:
@@ -34,13 +35,23 @@ def resolve_docset_filters(
             resolved.add(slug)
             continue
         docset = read_docset_manifest(cache_root, slug)
-        if docset:
-            aliases = set()
-            raw_docset = next(
-                (item for item in docset.raw_files if item.file == "raw/docset.json"), None
-            )
-            if raw_docset:
-                aliases.add(summary.slug.lower())
-            if aliases & language_values:
-                resolved.add(slug)
+        if docset and docset_aliases(cache_root, slug) & language_values:
+            resolved.add(slug)
     return resolved
+
+
+def docset_aliases(cache_root: str | Path, slug: str) -> set[str]:
+    """Return aliases stored in a docset metadata file."""
+    path = cache_paths(cache_root).docs_root / slug / "raw" / "docset.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+    if not isinstance(raw, dict):
+        return set()
+    aliases = raw.get("aliases", raw.get("alias"))
+    if isinstance(aliases, str):
+        return {aliases.lower()}
+    if isinstance(aliases, list):
+        return {item.lower() for item in aliases if isinstance(item, str)}
+    return set()

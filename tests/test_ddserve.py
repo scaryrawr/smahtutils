@@ -23,6 +23,7 @@ from ddserve.embeddings.storage import open_embedding_storage
 from ddserve.http import HttpClient
 from ddserve.install import install_docset, update_docsets
 from ddserve.search import search_docs
+from ddserve.search.filters import resolve_docset_filters
 from ddserve.server_shared import get_page_content, list_pages
 from ddserve.text import extract_html_section, normalize_link_href, render_markdown
 
@@ -179,11 +180,13 @@ def test_text_extracts_anchor_sections_and_normalizes_links() -> None:
 
 def test_render_markdown_keeps_generated_header_and_code_block() -> None:
     """Validate render markdown keeps generated header and code block."""
-    markdown = render_markdown("Example", "example", "<h1>Example</h1><pre>print('hi')</pre>")
+    markdown = render_markdown(
+        "Example", "example", "<h1>Example</h1><pre>if ok:\n    return x</pre>"
+    )
 
     assert markdown.startswith("# Example\n\n> DevDocs path: example")
     assert "```" in markdown
-    assert "print('hi')" in markdown
+    assert "    return x" in markdown
 
 
 def test_render_markdown_preserves_text_after_images() -> None:
@@ -236,6 +239,18 @@ def test_docs_available_marks_installed_docsets(
 
     output = capsys.readouterr().out
     assert "*  http" in output
+
+
+def test_docset_filters_use_stored_aliases(tmp_path: Path) -> None:
+    """Validate docset filters use stored aliases."""
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+
+    assert resolve_docset_filters(tmp_path, languages=["headers"]) == {"http"}
 
 
 def test_docs_update_prints_progress(

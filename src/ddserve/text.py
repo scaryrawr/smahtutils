@@ -196,8 +196,22 @@ def clean_markdown(value: str) -> str:
     lines = [line.rstrip() for line in html.unescape(value).replace("\r\n", "\n").split("\n")]
     text = "\n".join(lines)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]{2,}", " ", text)
-    return text.strip()
+    return collapse_spaces_outside_code_fences(text).strip()
+
+
+def collapse_spaces_outside_code_fences(value: str) -> str:
+    """Collapse repeated spaces outside fenced code blocks."""
+    output: list[str] = []
+    in_code = False
+    for line in value.split("\n"):
+        if line.startswith("```"):
+            in_code = not in_code
+            output.append(line)
+        elif in_code:
+            output.append(line)
+        else:
+            output.append(re.sub(r"[ \t]{2,}", " ", line))
+    return "\n".join(output)
 
 
 def clean_inline(value: str) -> str:
