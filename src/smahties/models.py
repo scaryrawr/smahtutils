@@ -43,6 +43,15 @@ class StoredEmbeddingCandidate:
 
 
 @dataclass(frozen=True)
+class StoredCodeUnitEmbedding:
+    """Code unit and embedding vector loaded together for duplicate detection."""
+
+    unit: CodeUnit
+    vector: list[float]
+    norm: float
+
+
+@dataclass(frozen=True)
 class LexicalMatch:
     """FTS match and raw SQLite rank for one code unit."""
 

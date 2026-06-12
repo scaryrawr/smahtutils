@@ -46,6 +46,15 @@ class AnnoyIndexManager:
                 break
         return unit_ids
 
+    def item_count(self, model: str) -> int:
+        """Return the number of items in the current Annoy sidecar for a model."""
+
+        index = self._ensure_loaded(model)
+        if index is None:
+            return 0
+        metadata = self.store.annoy_index_metadata(model)
+        return int(metadata["item_count"]) if metadata else 0
+
     def _ensure_loaded(self, model: str) -> tuple[str, AnnoyIndex] | None:
         source_version = self.store.embedding_index_version(model)
         cached = self._loaded.get(model)

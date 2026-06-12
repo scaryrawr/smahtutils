@@ -215,6 +215,33 @@ def test_parser_extracts_python_units(tmp_path: Path) -> None:
     assert units[0].language == "python"
 
 
+def test_parser_collects_nested_tree_sitter_units(tmp_path: Path) -> None:
+    path = tmp_path / "component.ts"
+    path.write_text(
+        "class Greeter {\n  hello() {\n    return 'hi';\n  }\n}\n",
+        encoding="utf-8",
+    )
+    source = Scanner(tmp_path).read_source(path)
+
+    units = ParserRegistry().parse(source)
+
+    assert "class_declaration" in [unit.unit_type for unit in units]
+    assert "method_definition" in [unit.unit_type for unit in units]
+
+
+def test_parser_extracts_csharp_units(tmp_path: Path) -> None:
+    path = tmp_path / "Program.cs"
+    path.write_text("class Program { void Main() {} }\n", encoding="utf-8")
+    source = Scanner(tmp_path).read_source(path)
+
+    units = ParserRegistry().parse(source)
+
+    assert [(unit.language, unit.unit_type, unit.name) for unit in units] == [
+        ("csharp", "class_declaration", "Program"),
+        ("csharp", "method_declaration", "Main"),
+    ]
+
+
 def test_query_merge_combines_scores() -> None:
     unit = code_unit("one")
     matches = merge_matches(
