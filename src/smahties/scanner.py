@@ -28,7 +28,24 @@ EXCLUDED_DIR_NAMES = {
     "venv",
 }
 EXCLUDED_DIR_NAME_SUFFIXES = (".egg-info", ".dist-info")
-EXCLUDED_FILE_NAMES = {".gitignore", ".ignore", ".gitattributes", ".gitmodules"}
+EXCLUDED_FILE_NAMES = {
+    ".gitignore",
+    ".ignore",
+    ".gitattributes",
+    ".gitmodules",
+    "bun.lock",
+    "bun.lockb",
+    "Cargo.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "npm-shrinkwrap.json",
+    "package-lock.json",
+    "Pipfile.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
+    "yarn.lock",
+}
 
 
 class Scanner:
@@ -154,7 +171,7 @@ class Scanner:
             return set()
 
         result = subprocess.run(
-            ["git", "-C", str(self.git_root), "check-ignore", "--stdin"],
+            ["git", "-C", str(self.git_root), "check-ignore", "--no-index", "--stdin"],
             input="\n".join(relative_to_path) + "\n",
             capture_output=True,
             text=True,

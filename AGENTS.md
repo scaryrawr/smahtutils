@@ -41,4 +41,4 @@ Recent commits use short imperative subjects, sometimes scoped (`wickedpaste: ..
 
 ## Security & Configuration Tips
 
-Do not log clipboard contents, base64 images, API responses, embeddings, or secrets. Keep endpoint URLs and model names configurable. `smahties` skips `.git`, `.smahties`, `target`, `node_modules`, `.next`, `.turbo`, large files, and binary/non-UTF-8 files; indexing can be expensive on large trees.
+Do not log clipboard contents, base64 images, API responses, embeddings, or secrets. Keep endpoint URLs and model names configurable. `smahties` skips `.git`, `.smahties`, `target`, `node_modules`, `.next`, `.turbo`, large files, binary/non-UTF-8 files, common dependency lock files, and paths matching `.gitignore`; treat `.gitignore` as an indexing exclusion even for tracked files. Indexing can be expensive on large trees.

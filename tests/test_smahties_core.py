@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from smahties.app import purge_non_indexable_files
 from smahties.context import RuntimeContext
 from smahties.embedding import EmbeddingBatchLimits, embedding_batch_ranges
 from smahties.models import CodeUnit, LexicalMatch, QueryMatchKind, QueryMode
 from smahties.parser import ParserRegistry
 from smahties.scanner import Scanner, ensure_state_dir
 from smahties.service import build_fts_query, merge_matches
+from smahties.store import Store
 from smahties.vector import cosine_similarity, vector_from_blob, vector_to_blob
 
 
@@ -45,11 +47,13 @@ def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
     dependency = venv / "dependency.py"
     bytecode = cache / "lib.pyc"
     package_metadata = egg_info / "PKG-INFO"
+    lock_file = tmp_path / "uv.lock"
     source.write_text("fn main() {}\n", encoding="utf-8")
     ignored.write_text("fn generated() {}\n", encoding="utf-8")
     dependency.write_text("def dependency(): pass\n", encoding="utf-8")
     bytecode.write_text("cache\n", encoding="utf-8")
     package_metadata.write_text("Name: smahtutils\n", encoding="utf-8")
+    lock_file.write_text("version = 1\n", encoding="utf-8")
 
     scanner = Scanner(tmp_path)
     discovered = scanner.discover_files(tmp_path)
@@ -59,6 +63,8 @@ def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
     assert dependency not in discovered
     assert bytecode not in discovered
     assert package_metadata not in discovered
+    assert lock_file not in discovered
+    assert scanner.read_source(lock_file) is None
 
 
 def test_scanner_skips_gitignored_paths(tmp_path: Path) -> None:
@@ -82,6 +88,90 @@ def test_scanner_skips_gitignored_paths(tmp_path: Path) -> None:
     assert ignored_source not in discovered
     assert ignored_log not in discovered
     assert scanner.read_source(ignored_source) is None
+
+
+def test_scanner_treats_gitignore_as_indexing_exclude_for_tracked_files(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git is required for gitignore filtering")
+
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    tracked_ignored = tmp_path / "generated" / "tracked.py"
+    tracked_ignored.parent.mkdir()
+    tracked_ignored.write_text("def generated(): pass\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", tracked_ignored.relative_to(tmp_path)],
+        check=True,
+    )
+    (tmp_path / ".gitignore").write_text("generated/*.py\n", encoding="utf-8")
+
+    scanner = Scanner(tmp_path)
+
+    assert tracked_ignored not in scanner.discover_files(tmp_path)
+    assert scanner.read_source(tracked_ignored) is None
+
+
+def test_scanner_respects_nested_gitignore_when_scanning_scope(tmp_path: Path) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git is required for gitignore filtering")
+
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    app = tmp_path / "apps" / "api"
+    source = app / "src" / "main.py"
+    ignored_source = app / "local-only" / "generated.py"
+    ignored_cache = app / "debug.cache"
+    source.parent.mkdir(parents=True)
+    ignored_source.parent.mkdir()
+    source.write_text("def main(): pass\n", encoding="utf-8")
+    ignored_source.write_text("def generated(): pass\n", encoding="utf-8")
+    ignored_cache.write_text("debug\n", encoding="utf-8")
+    (app / ".gitignore").write_text("local-only/\n*.cache\n", encoding="utf-8")
+
+    scanner = Scanner(tmp_path)
+    discovered = scanner.discover_files(app)
+
+    assert source in discovered
+    assert ignored_source not in discovered
+    assert ignored_cache not in discovered
+
+
+def test_purge_non_indexable_files_removes_gitignored_store_entries(tmp_path: Path) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git is required for gitignore filtering")
+
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    ignored_file = tmp_path / "generated" / "old.py"
+    kept_file = tmp_path / "src" / "main.py"
+    ignored_file.parent.mkdir()
+    kept_file.parent.mkdir()
+    ignored_file.write_text("def old(): pass\n", encoding="utf-8")
+    kept_file.write_text("def main(): pass\n", encoding="utf-8")
+    (tmp_path / ".gitignore").write_text("generated/*.py\n", encoding="utf-8")
+    store = Store(tmp_path / "smahties.sqlite")
+    ignored_unit = code_unit("ignored", file_path="generated/old.py")
+    kept_unit = code_unit("kept", file_path="src/main.py")
+    store.replace_file_units(
+        ignored_unit.file_path,
+        "hash-ignored",
+        "parser",
+        [ignored_unit],
+        "model",
+        [[1.0]],
+    )
+    store.replace_file_units(
+        kept_unit.file_path,
+        "hash-kept",
+        "parser",
+        [kept_unit],
+        "model",
+        [[1.0]],
+    )
+
+    purge_non_indexable_files(store, Scanner(tmp_path))
+
+    assert store.code_units_by_ids(["ignored"]) == []
+    assert [unit.file_path for unit in store.code_units_by_ids(["kept"])] == ["src/main.py"]
 
 
 def test_state_dir_contains_gitignore(tmp_path: Path) -> None:
@@ -145,10 +235,10 @@ def test_fts_query_uses_safe_prefix_tokens() -> None:
     assert build_fts_query("! ? a") is None
 
 
-def code_unit(id_: str) -> CodeUnit:
+def code_unit(id_: str, file_path: str = "src/lib.rs") -> CodeUnit:
     return CodeUnit(
         id=id_,
-        file_path="src/lib.rs",
+        file_path=file_path,
         start_line=1,
         end_line=1,
         start_byte=0,
