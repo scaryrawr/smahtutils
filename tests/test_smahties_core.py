@@ -59,6 +59,17 @@ def test_runtime_context_scopes_repo_paths(tmp_path: Path) -> None:
     assert context.scoped_path_prefix("src") == "apps/api/src"
 
 
+def test_runtime_context_has_no_scope_at_repo_root(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    context = RuntimeContext.resolve(repo)
+
+    assert context.scope_prefix is None
+    assert context.scoped_path_prefix(None) is None
+    assert context.scoped_path_prefix("src") == "src"
+
+
 def test_parser_extracts_python_units(tmp_path: Path) -> None:
     path = tmp_path / "app.py"
     path.write_text("class Greeter:\n    def hello(self):\n        return 'hi'\n", encoding="utf-8")

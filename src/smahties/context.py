@@ -31,8 +31,8 @@ class RuntimeContext:
         storage_root = repository_root or runtime_root
         scope_prefix = None
         if repository_root is not None:
-            relative = runtime_root.relative_to(repository_root).as_posix()
-            scope_prefix = relative or None
+            relative = runtime_root.relative_to(repository_root)
+            scope_prefix = relative.as_posix() if relative.parts else None
         return cls(
             repository_root=repository_root,
             storage_root=storage_root,

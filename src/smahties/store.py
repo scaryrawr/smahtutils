@@ -282,12 +282,12 @@ class Store:
 
         with self._lock, self._conn:
             self._conn.execute(
-                "DELETE FROM code_units_fts WHERE file_path = ? OR file_path LIKE ?",
-                (prefix, f"{prefix}/%"),
+                f"DELETE FROM code_units_fts WHERE {path_prefix_clause('file_path')}",
+                path_prefix_params(prefix),
             )
             self._conn.execute(
-                "DELETE FROM files WHERE path = ? OR path LIKE ?",
-                (prefix, f"{prefix}/%"),
+                f"DELETE FROM files WHERE {path_prefix_clause('path')}",
+                path_prefix_params(prefix),
             )
 
     def delete_file_name(self, file_name: str) -> None:
@@ -486,8 +486,8 @@ class Store:
         clauses = ["code_units_fts MATCH ?"]
         params: list[object] = [query]
         if path_prefix:
-            clauses.append("(f.file_path = ? OR f.file_path LIKE ?)")
-            params.extend([path_prefix, f"{path_prefix}/%"])
+            clauses.append(path_prefix_clause("f.file_path"))
+            params.extend(path_prefix_params(path_prefix))
         if language:
             clauses.append("f.language = ?")
             params.append(language)
@@ -636,8 +636,8 @@ class Store:
         clauses: list[str] = []
         params: list[object] = []
         if path_prefix:
-            clauses.append("(file_path = ? OR file_path LIKE ?)")
-            params.extend([path_prefix, f"{path_prefix}/%"])
+            clauses.append(path_prefix_clause("file_path"))
+            params.extend(path_prefix_params(path_prefix))
         if language:
             clauses.append("language = ?")
             params.append(language)
@@ -684,6 +684,18 @@ def _code_unit_from_row(row: sqlite3.Row) -> CodeUnit:
         language=row["language"],
         parser_key=row["parser_key"],
     )
+
+
+def path_prefix_clause(column: str) -> str:
+    """Return a SQL fragment for literal path-prefix matching."""
+
+    return f"({column} = ? OR substr({column}, 1, length(?) + 1) = ? || '/')"
+
+
+def path_prefix_params(prefix: str) -> tuple[str, str, str]:
+    """Return repeated parameters for path_prefix_clause."""
+
+    return (prefix, prefix, prefix)
 
 
 def unix_now() -> int:
