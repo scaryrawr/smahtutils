@@ -156,7 +156,7 @@ class EmbeddingStorage:
         pages_columns = self.table_columns("pages")
         embeddings_columns = self.table_columns("embeddings")
         docsets_columns = self.table_columns("docsets")
-        return (
+        return bool(
             not {"id", "title", "name", "path"}.issubset(pages_columns)
             or {"page_id", "page_title", "page_name", "page_path"}.intersection(pages_columns)
             or {"vector_encoding", "vector_hash"}.intersection(embeddings_columns)
