@@ -42,50 +42,63 @@ SPECS = (
         ("ts", "mts", "cts"),
         "tree_sitter_typescript",
         TYPESCRIPT_KINDS,
-        "tree-sitter-typescript:v1",
+        "tree-sitter-typescript:v2",
     ),
     LanguageSpec(
         "tsx",
         ("tsx",),
         "tree_sitter_typescript",
         TYPESCRIPT_KINDS,
-        "tree-sitter-tsx:v1",
+        "tree-sitter-tsx:v2",
     ),
     LanguageSpec(
         "rust",
         ("rs",),
         "tree_sitter_rust",
         ("function_item", "impl_item", "struct_item", "enum_item", "trait_item", "mod_item"),
-        "tree-sitter-rust:v1",
+        "tree-sitter-rust:v2",
     ),
     LanguageSpec(
         "cpp",
-        ("cpp", "cxx", "cc", "hpp", "hxx", "hh"),
+        ("cpp", "cxx", "cc", "c++", "hpp", "hxx", "hh", "h++"),
         "tree_sitter_cpp",
         C_FAMILY_KINDS,
-        "tree-sitter-cpp:v1",
+        "tree-sitter-cpp:v2",
     ),
-    LanguageSpec("c", ("c", "h"), "tree_sitter_c", C_FAMILY_KINDS, "tree-sitter-c:v1"),
+    LanguageSpec("c", ("c", "h"), "tree_sitter_c", C_FAMILY_KINDS, "tree-sitter-c:v2"),
+    LanguageSpec(
+        "csharp",
+        ("cs",),
+        "tree_sitter_c_sharp",
+        (
+            "class_declaration",
+            "struct_declaration",
+            "record_declaration",
+            "method_declaration",
+            "constructor_declaration",
+        ),
+        "tree-sitter-c-sharp:v1",
+    ),
     LanguageSpec(
         "go",
         ("go",),
         "tree_sitter_go",
         ("function_declaration", "method_declaration", "type_declaration"),
-        "tree-sitter-go:v1",
+        "tree-sitter-go:v2",
     ),
     LanguageSpec(
         "bash",
         ("sh", "bash", "zsh"),
         "tree_sitter_bash",
         ("function_definition",),
-        "tree-sitter-bash:v1",
+        "tree-sitter-bash:v2",
     ),
     LanguageSpec(
         "css",
         ("css",),
         "tree_sitter_css",
         ("rule_set", "media_statement"),
-        "tree-sitter-css:v1",
+        "tree-sitter-css:v2",
     ),
     LanguageSpec(
         "java",
@@ -98,14 +111,14 @@ SPECS = (
             "enum_declaration",
             "constructor_declaration",
         ),
-        "tree-sitter-java:v1",
+        "tree-sitter-java:v2",
     ),
     LanguageSpec(
         "ruby",
         ("rb",),
         "tree_sitter_ruby",
         ("method", "singleton_method", "class", "module"),
-        "tree-sitter-ruby:v1",
+        "tree-sitter-ruby:v2",
     ),
 )
 
@@ -239,7 +252,6 @@ def collect_units(
                 spec.cache_key,
             )
         )
-        return
 
     for child in node.named_children:
         collect_units(child, source_file, spec, source_bytes, units)

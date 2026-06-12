@@ -1,6 +1,6 @@
 # smahtutils
 
-Utilities for turning local context into useful LLM inputs and local code-search context. This Python project contains two command-line apps plus shared configuration helpers.
+Utilities for turning local context into useful LLM inputs and local code-search context. This Python project contains command-line apps plus shared configuration helpers.
 
 These are mostly vibe-coded tools for personal development workflows. They work for the author's setup, but they are not polished products; your mileage may vary.
 
@@ -9,7 +9,7 @@ These are mostly vibe-coded tools for personal development workflows. They work 
 | Path | Purpose |
 | --- | --- |
 | `src/wickedpaste` | Reads the system clipboard, prefers images over text, and asks an OpenAI-compatible chat model to return HTML and GitHub Flavored Markdown. |
-| `src/smahties` | Runs a local semantic code-search MCP stdio server with indexing, code-unit extraction, embeddings, Annoy vector search, and keyword/hybrid query support. |
+| `src/smahties` | Runs a local semantic code-search MCP stdio server with indexing, code-unit extraction, embeddings, Annoy vector search, keyword/hybrid query support, and duplicate-code reports. |
 | `src/wickedsmaht_config` | Loads shared defaults from `$HOME/.wickedsmaht/config.json` and resolves CLI values over config values. |
 | `tests` | Unit tests for config, scanner/parser behavior, vector helpers, SQLite store behavior, Annoy indexing, and clipboard image encoding. |
 
@@ -69,6 +69,7 @@ uv run smahties status
 uv run smahties query "where is config loaded?"
 uv run smahties query "where is config loaded?" --mode keyword --json
 uv run smahties list-indexed --language python --limit 20 --include-source
+uv run smahties duplicates src --threshold 0.85 --level function,class
 ```
 
 Use `--root <path>` to serve or query a different local coding directory.
@@ -80,6 +81,25 @@ When running inside a Git repository, `smahties` stores state under the reposito
 The scanner skips binary or non-UTF-8 files, files larger than 512 KiB, and common generated or expensive paths such as `.git`, `.smahties`, `target`, `node_modules`, `.next`, and `.turbo`.
 
 SQLite remains the authoritative store for files, code units, embeddings, FTS keyword search, work queue, leases, and status. Annoy indexes are rebuildable sidecar files under `.smahties/annoy/`, keyed by embedding model and dimension. Semantic queries ask Annoy for a bounded candidate set and exact-score only those candidates, avoiding full brute-force scans over all stored embeddings.
+
+## `smahties duplicates`
+
+`smahties duplicates` migrates Codigami-style duplicate-code detection into the existing Python index. It queues indexing for the requested path or paths, uses the Annoy sidecar to find bounded nearest-neighbor candidates for stored function/class embeddings, exact-scores candidate pairs above the threshold, and prints a Codigami-compatible JSON report. File-level comparisons use transient whole-file embeddings for the run.
+
+```bash
+uv run smahties duplicates
+uv run smahties duplicates src tests --threshold 0.82
+uv run smahties duplicates --level function,class --output duplicates.json
+uv run smahties duplicates --level file
+```
+
+Options:
+
+- `path` — one or more files/directories under the active `--root`; defaults to `.`.
+- `--threshold`, `-t` — cosine similarity threshold from `0.0` to `1.0`; defaults to `0.92`.
+- `--level`, `-l` — `function`, `class`, or `file`; repeat or comma-separate values. Defaults to `function`.
+- `--language` — restrict comparisons to a stored parser language such as `python`, `typescript`, or `rust`.
+- `--output`, `-o` — write the JSON report to a file instead of stdout.
 
 ## `wickedpaste` behavior
 
