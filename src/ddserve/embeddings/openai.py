@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
 from ddserve.config import DdserveConfig, resolve_openai_api_key
@@ -20,6 +21,22 @@ class EmbeddingClient(Protocol):
         ...
 
 
+class AsyncEmbeddingClient(Protocol):
+    """Represent AsyncEmbeddingClient."""
+
+    async def create_embeddings(self, input: EmbeddingInput) -> list[EmbeddingVector]:
+        """Create embedding vectors for one or more text inputs."""
+        ...
+
+
+@dataclass(frozen=True)
+class EmbeddingBatchLimits:
+    """Embedding request size limits."""
+
+    max_inputs: int
+    max_request_bytes: int
+
+
 def create_openai_embedding_client(
     config: DdserveConfig, env: dict[str, str] | None = None
 ) -> EmbeddingClient:
@@ -35,6 +52,23 @@ def create_openai_embedding_client(
     )[1]
     client = OpenAI(api_key=api_key, base_url=config.openai.base_url)
     return OpenAiEmbeddingClient(client, config.openai.embedding_model)
+
+
+def create_openai_async_embedding_client(
+    config: DdserveConfig, env: dict[str, str] | None = None
+) -> AsyncEmbeddingClient:
+    """Create an async OpenAI-compatible embedding client."""
+    if config.openai is None:
+        raise DdserveError("OpenAI embeddings are not configured")
+    try:
+        from openai import AsyncOpenAI
+    except ImportError as exc:
+        raise DdserveError("official `openai` package is required to create embeddings") from exc
+    api_key = (
+        resolve_openai_api_key(config, env) or ("placeholder", INTERNAL_API_KEY_PLACEHOLDER)
+    )[1]
+    client = AsyncOpenAI(api_key=api_key, base_url=config.openai.base_url)
+    return AsyncOpenAiEmbeddingClient(client, config.openai.embedding_model)
 
 
 class OpenAiEmbeddingClient:
@@ -56,6 +90,25 @@ class OpenAiEmbeddingClient:
         return extract_embedding_vectors(data, expected_embedding_count(normalized))
 
 
+class AsyncOpenAiEmbeddingClient:
+    """Represent AsyncOpenAiEmbeddingClient."""
+
+    def __init__(self, client: object, model: str) -> None:
+        """Implement init."""
+        self.client = client
+        self.model = model
+
+    async def create_embeddings(self, input: EmbeddingInput) -> list[EmbeddingVector]:
+        """Implement create embeddings."""
+        normalized = normalize_embedding_input(input)
+        try:
+            response = await self.client.embeddings.create(model=self.model, input=normalized)
+        except Exception as exc:
+            raise DdserveError(f"OpenAI embedding request failed: {exc}") from exc
+        data = getattr(response, "data", None)
+        return extract_embedding_vectors(data, expected_embedding_count(normalized))
+
+
 def normalize_embedding_input(input: EmbeddingInput) -> str | list[str]:
     """Normalize embedding input."""
     if isinstance(input, str):
@@ -69,6 +122,33 @@ def normalize_embedding_input(input: EmbeddingInput) -> str | list[str]:
 def expected_embedding_count(input: str | list[str]) -> int:
     """Implement expected embedding count."""
     return 1 if isinstance(input, str) else len(input)
+
+
+def embedding_batch_ranges(
+    texts: list[str],
+    limits: EmbeddingBatchLimits,
+) -> list[tuple[int, int]]:
+    """Return half-open ranges that fit embedding request limits."""
+    if limits.max_inputs <= 0 or limits.max_request_bytes <= 0:
+        raise DdserveError("Embedding batch limits must be greater than zero")
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    request_bytes = 0
+    for index, text in enumerate(texts):
+        input_bytes = len(text.encode("utf-8"))
+        batch_inputs = index - start
+        would_exceed_inputs = batch_inputs >= limits.max_inputs
+        would_exceed_bytes = (
+            batch_inputs > 0 and request_bytes + input_bytes > limits.max_request_bytes
+        )
+        if would_exceed_inputs or would_exceed_bytes:
+            ranges.append((start, index))
+            start = index
+            request_bytes = 0
+        request_bytes += input_bytes
+    if start < len(texts):
+        ranges.append((start, len(texts)))
+    return ranges
 
 
 def extract_embedding_vectors(data: object, expected_count: int) -> list[EmbeddingVector]:

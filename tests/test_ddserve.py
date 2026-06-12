@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from pathlib import Path
@@ -17,8 +18,9 @@ from ddserve.config import (
 )
 from ddserve.devdocs import normalize_docsets
 from ddserve.embeddings.annoy_index import AnnoyIndexManager
-from ddserve.embeddings.chunks import split_markdown_into_chunks
-from ddserve.embeddings.index import rebuild_docset_embeddings
+from ddserve.embeddings.chunks import chunk_markdown_pages, split_markdown_into_chunks
+from ddserve.embeddings.index import create_embedding_vectors_async, rebuild_docset_embeddings
+from ddserve.embeddings.openai import EmbeddingBatchLimits, embedding_batch_ranges
 from ddserve.embeddings.storage import open_embedding_storage
 from ddserve.http import HttpClient
 from ddserve.install import install_docset, update_docsets
@@ -56,6 +58,35 @@ class FakeHttp(HttpClient):
             payload = {"entries": [{"name": "Headers", "path": "headers", "type": "Guide"}]}
         else:
             payload = {"headers": "<h1>Headers</h1><p>Request headers document metadata.</p>"}
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        data = target.read_bytes()
+        import hashlib
+
+        return DownloadedFile(
+            path=str(target), bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+        )
+
+
+class MultiFakeHttp(HttpClient):
+    """Represent MultiFakeHttp."""
+
+    def fetch_json(self, _url: str) -> object:
+        """Implement fetch json."""
+        return [
+            {"name": "HTTP", "slug": "http", "type": "protocol", "mtime": 10},
+            {"name": "CSS", "slug": "css", "type": "style", "mtime": 10},
+        ]
+
+    def download_file(self, url: str, destination: str | Path):
+        """Implement download file."""
+        from ddserve.models import DownloadedFile
+
+        target = Path(destination)
+        slug = url.rstrip("/").split("/")[-2]
+        if url.endswith("/index.json"):
+            payload = {"entries": [{"name": slug.upper(), "path": slug, "type": "Guide"}]}
+        else:
+            payload = {slug: f"<h1>{slug.upper()}</h1><p>{slug} request metadata.</p>"}
         target.write_text(json.dumps(payload), encoding="utf-8")
         data = target.read_bytes()
         import hashlib
@@ -203,6 +234,80 @@ def test_markdown_chunking_uses_overlap_and_sentence_boundaries() -> None:
 
     assert len(chunks) >= 2
     assert chunks[0].startswith("One sentence.")
+
+
+def test_markdown_chunking_bounds_chunks_per_page(tmp_path: Path) -> None:
+    """Validate chunking caps pathological page chunk counts."""
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+    from ddserve.cache import read_docset_manifest
+
+    docset = read_docset_manifest(tmp_path, "http")
+    assert docset is not None
+    page = docset.pages[0]
+    page_path = tmp_path / "docs" / "http" / page.file
+    page_path.write_text(" ".join(f"Sentence {index}." for index in range(80)), encoding="utf-8")
+
+    chunked = chunk_markdown_pages(
+        docset,
+        tmp_path,
+        max_chunk_chars=40,
+        overlap_chars=0,
+        min_chunk_chars=1,
+        max_chunks_per_page=2,
+    )
+
+    assert len(chunked.chunks) == 2
+    assert chunked.stats.truncated_pages == 1
+    assert chunked.stats.truncated_chunks > 0
+
+
+def test_embedding_batch_ranges_respect_request_bytes() -> None:
+    """Validate embedding batches are bounded by request bytes as well as count."""
+    ranges = embedding_batch_ranges(
+        ["aa", "bbb", "cccc", "d"],
+        EmbeddingBatchLimits(max_inputs=10, max_request_bytes=6),
+    )
+
+    assert ranges == [(0, 2), (2, 4)]
+
+
+def test_async_embedding_batches_preserve_order_and_limit_concurrency() -> None:
+    """Validate async embedding batches are bounded and ordered."""
+
+    class TrackingAsyncClient:
+        """Represent TrackingAsyncClient."""
+
+        def __init__(self) -> None:
+            """Implement init."""
+            self.active = 0
+            self.max_active = 0
+
+        async def create_embeddings(self, input_):
+            """Implement create embeddings."""
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return [[float(value), 0.0] for value in input_]
+
+    async def run() -> TrackingAsyncClient:
+        client = TrackingAsyncClient()
+        vectors = await create_embedding_vectors_async(
+            ["1", "2", "3", "4", "5"],
+            EmbeddingBatchLimits(max_inputs=1, max_request_bytes=16),
+            client,
+            max_concurrent_requests=2,
+        )
+        assert vectors == [[1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0], [5.0, 0.0]]
+        return client
+
+    client = asyncio.run(run())
+    assert client.max_active == 2
 
 
 def test_install_docset_writes_manifests_and_pages(tmp_path: Path) -> None:
@@ -688,3 +793,140 @@ def test_rebuild_embeddings_forces_current_vectors(tmp_path: Path) -> None:
 
     assert client.calls == 2
     assert result["embedded"] == 1
+
+
+def test_embedding_storage_uses_wal_and_busy_timeout(tmp_path: Path) -> None:
+    """Validate ddserve SQLite storage is configured for concurrent readers."""
+    storage = open_embedding_storage(tmp_path)
+    try:
+        journal_mode = storage.conn.execute("PRAGMA journal_mode").fetchone()[0]
+        busy_timeout = storage.conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    finally:
+        storage.close()
+
+    assert journal_mode == "wal"
+    assert busy_timeout == 30000
+
+
+def test_embedding_storage_rebuilds_chunk_fts(tmp_path: Path) -> None:
+    """Validate chunk FTS can be rebuilt from authoritative chunks."""
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+    from ddserve.cache import read_docset_manifest
+    from ddserve.embeddings.chunks import chunk_markdown_pages
+
+    docset = read_docset_manifest(tmp_path, "http")
+    assert docset is not None
+    chunked = chunk_markdown_pages(docset, tmp_path)
+    storage = open_embedding_storage(tmp_path)
+    try:
+        storage.replace_docset_chunks(chunked.docset, chunked.chunks, None, None)
+        storage.conn.execute("DELETE FROM chunk_fts")
+        storage.conn.commit()
+
+        assert storage.keyword_chunks(["request"]) == []
+
+        storage.rebuild_chunk_fts()
+
+        assert storage.keyword_chunks(["request"])
+    finally:
+        storage.close()
+
+
+def test_embedding_storage_resets_legacy_schema(tmp_path: Path) -> None:
+    """Validate incompatible legacy embedding schemas are reset."""
+    database = tmp_path / "embeddings" / "embeddings.sqlite"
+    database.parent.mkdir(parents=True)
+    conn = sqlite3.connect(database)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE docsets (
+                slug TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE pages (
+                docset_slug TEXT NOT NULL,
+                page_id TEXT NOT NULL,
+                page_title TEXT NOT NULL,
+                page_name TEXT NOT NULL,
+                page_path TEXT NOT NULL,
+                PRIMARY KEY (docset_slug, page_id)
+            );
+            CREATE TABLE embeddings (
+                chunk_id INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                dimensions INTEGER NOT NULL,
+                vector_encoding TEXT NOT NULL,
+                vector BLOB NOT NULL,
+                vector_hash TEXT NOT NULL,
+                PRIMARY KEY (chunk_id, model, dimensions)
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    storage = open_embedding_storage(tmp_path)
+    try:
+        assert {"id", "title", "name", "path"}.issubset(storage.table_columns("pages"))
+        assert "page_id" not in storage.table_columns("pages")
+        assert "vector_encoding" not in storage.table_columns("embeddings")
+    finally:
+        storage.close()
+
+
+def test_multi_docset_update_defers_annoy_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate docs update rebuilds Annoy once for a multi-docset run."""
+    http = MultiFakeHttp()
+    disabled = DdserveConfig(embeddings=EmbeddingsConfig(enabled=False))
+    install_docset("http", str(tmp_path), http=http, config=disabled)
+    install_docset("css", str(tmp_path), http=http, config=disabled)
+
+    class FakeEmbeddingClient:
+        """Represent FakeEmbeddingClient."""
+
+        def create_embeddings(self, input_):
+            """Implement create embeddings."""
+            if isinstance(input_, str):
+                return [[1.0, 0.0]]
+            return [[1.0, 0.0] for _item in input_]
+
+    class CountingAnnoyIndexManager:
+        """Represent CountingAnnoyIndexManager."""
+
+        calls = 0
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            """Implement init."""
+
+        def ensure(self, _model: str) -> bool:
+            """Implement ensure."""
+            type(self).calls += 1
+            return True
+
+    monkeypatch.setattr("ddserve.install.AnnoyIndexManager", CountingAnnoyIndexManager)
+
+    results = update_docsets(
+        None,
+        str(tmp_path),
+        offline=True,
+        config=DdserveConfig(
+            embeddings=EmbeddingsConfig(enabled=True),
+            openai=OpenAiConfig(embedding_model="embed"),
+        ),
+        embedding_client=FakeEmbeddingClient(),
+    )
+
+    assert CountingAnnoyIndexManager.calls == 1
+    assert [result.slug for result in results] == ["css", "http"]
+    assert all(result.annoy_indexed for result in results)

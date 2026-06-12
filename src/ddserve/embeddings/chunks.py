@@ -13,7 +13,9 @@ from ddserve.models import DocsetManifest, PageManifestEntry
 from ddserve.text import remove_unpaired_surrogates
 
 DEFAULT_CHUNK_MAX_CHARS = 2400
+DEFAULT_CHUNK_MIN_CHARS = 200
 DEFAULT_CHUNK_OVERLAP_CHARS = 200
+DEFAULT_MAX_CHUNKS_PER_PAGE = 512
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,18 @@ class ChunkedMarkdownPages:
 
     docset: dict[str, object]
     chunks: list[PreparedEmbeddingChunk]
+    stats: "ChunkingStats"
+
+
+@dataclass(frozen=True)
+class ChunkingStats:
+    """Represent chunk preparation counters."""
+
+    pages: int = 0
+    duplicate_pages: int = 0
+    truncated_pages: int = 0
+    truncated_chunks: int = 0
+    small_chunks: int = 0
 
 
 def chunk_markdown_pages(
@@ -43,24 +57,40 @@ def chunk_markdown_pages(
     slug: str | None = None,
     max_chunk_chars: int | None = None,
     overlap_chars: int | None = None,
+    min_chunk_chars: int | None = None,
+    max_chunks_per_page: int | None = None,
 ) -> ChunkedMarkdownPages:
     """Implement chunk markdown pages."""
     slug = slug or manifest.slug
     assert_safe_path_segment(slug, "docset slug")
     if slug != manifest.slug:
         raise DdserveError(f'Manifest slug "{manifest.slug}" does not match docset slug "{slug}"')
-    max_chars, overlap = normalize_chunk_options(max_chunk_chars, overlap_chars)
+    max_chars, overlap, min_chars, page_chunk_limit = normalize_chunk_options(
+        max_chunk_chars, overlap_chars, min_chunk_chars, max_chunks_per_page
+    )
     chunks: list[PreparedEmbeddingChunk] = []
     seen_body_hashes: set[str] = set()
+    duplicate_pages = 0
+    truncated_pages = 0
+    truncated_chunks = 0
+    small_chunks = 0
     for page in manifest.pages:
         markdown = read_installed_page_markdown(cache_root, slug, page)
         source_text = normalize_markdown_text(markdown)
         body_hash = hash_page_content(strip_generated_page_header(source_text))
         if body_hash in seen_body_hashes:
+            duplicate_pages += 1
             continue
         seen_body_hashes.add(body_hash)
         source_hash = hash_page_content(source_text)
-        for ordinal, body in enumerate(split_markdown_into_chunks(source_text, max_chars, overlap)):
+        bodies = split_markdown_into_chunks(source_text, max_chars, overlap, min_chars)
+        if len(bodies) > page_chunk_limit:
+            truncated_pages += 1
+            truncated_chunks += len(bodies) - page_chunk_limit
+            bodies = bodies[:page_chunk_limit]
+        for ordinal, body in enumerate(bodies):
+            if len(body) < min_chars:
+                small_chunks += 1
             text = normalize_markdown_text(format_chunk_text(manifest, page, body))
             chunks.append(
                 PreparedEmbeddingChunk(
@@ -73,7 +103,14 @@ def chunk_markdown_pages(
                     metadata_json=chunk_metadata_json(manifest, page, ordinal),
                 )
             )
-    return ChunkedMarkdownPages(docset=docset_embedding_input(manifest), chunks=chunks)
+    stats = ChunkingStats(
+        pages=len(manifest.pages),
+        duplicate_pages=duplicate_pages,
+        truncated_pages=truncated_pages,
+        truncated_chunks=truncated_chunks,
+        small_chunks=small_chunks,
+    )
+    return ChunkedMarkdownPages(docset=docset_embedding_input(manifest), chunks=chunks, stats=stats)
 
 
 def read_installed_page_markdown(cache_root: str | Path, slug: str, page: PageManifestEntry) -> str:
@@ -93,9 +130,12 @@ def split_markdown_into_chunks(
     markdown: str,
     max_chunk_chars: int = DEFAULT_CHUNK_MAX_CHARS,
     overlap_chars: int = DEFAULT_CHUNK_OVERLAP_CHARS,
+    min_chunk_chars: int | None = None,
 ) -> list[str]:
     """Implement split markdown into chunks."""
-    max_chars, overlap = normalize_chunk_options(max_chunk_chars, overlap_chars)
+    max_chars, overlap, min_chars, _max_chunks_per_page = normalize_chunk_options(
+        max_chunk_chars, overlap_chars, min_chunk_chars, DEFAULT_MAX_CHUNKS_PER_PAGE
+    )
     text = normalize_markdown_text(markdown)
     if not text:
         return []
@@ -118,7 +158,7 @@ def split_markdown_into_chunks(
             break
         next_cursor = max(cursor + 1, end - overlap) if overlap > 0 else end
         cursor = end if next_cursor <= cursor else next_cursor
-    return chunks
+    return merge_small_chunks(chunks, min_chars, max_chars)
 
 
 def source_page_identity(
@@ -231,18 +271,52 @@ def strip_generated_page_header(text: str) -> str:
 
 
 def normalize_chunk_options(
-    max_chunk_chars: int | None, overlap_chars: int | None
-) -> tuple[int, int]:
+    max_chunk_chars: int | None,
+    overlap_chars: int | None,
+    min_chunk_chars: int | None = None,
+    max_chunks_per_page: int | None = None,
+) -> tuple[int, int, int, int]:
     """Normalize chunk options."""
-    max_chars = max_chunk_chars or DEFAULT_CHUNK_MAX_CHARS
+    max_chars = DEFAULT_CHUNK_MAX_CHARS if max_chunk_chars is None else max_chunk_chars
+    min_chars = DEFAULT_CHUNK_MIN_CHARS if min_chunk_chars is None else min_chunk_chars
     overlap = DEFAULT_CHUNK_OVERLAP_CHARS if overlap_chars is None else overlap_chars
+    page_chunk_limit = (
+        DEFAULT_MAX_CHUNKS_PER_PAGE if max_chunks_per_page is None else max_chunks_per_page
+    )
     if not isinstance(max_chars, int) or max_chars <= 0:
         raise DdserveError("Invalid max chunk size: expected a positive integer")
+    if not isinstance(min_chars, int) or min_chars <= 0:
+        raise DdserveError("Invalid min chunk size: expected a positive integer")
     if not isinstance(overlap, int) or overlap < 0:
         raise DdserveError("Invalid chunk overlap: expected a non-negative integer")
+    if not isinstance(page_chunk_limit, int) or page_chunk_limit <= 0:
+        raise DdserveError("Invalid max chunks per page: expected a positive integer")
+    if min_chunk_chars is None and min_chars > max_chars:
+        min_chars = max_chars
+    if min_chars > max_chars:
+        raise DdserveError("Invalid min chunk size: must not exceed max chunk size")
     if overlap >= max_chars:
         raise DdserveError("Invalid chunk overlap: must be smaller than max chunk size")
-    return max_chars, overlap
+    return max_chars, overlap, min_chars, page_chunk_limit
+
+
+def merge_small_chunks(chunks: list[str], min_chunk_chars: int, max_chunk_chars: int) -> list[str]:
+    """Merge undersized chunks when doing so does not exceed the maximum size."""
+    if len(chunks) <= 1:
+        return chunks
+    merged: list[str] = []
+    for chunk in chunks:
+        if merged and len(chunk) < min_chunk_chars:
+            candidate = normalize_markdown_text(f"{merged[-1]}\n\n{chunk}")
+            if len(candidate) <= max_chunk_chars:
+                merged[-1] = candidate
+                continue
+        merged.append(chunk)
+    if len(merged) > 1 and len(merged[0]) < min_chunk_chars:
+        candidate = normalize_markdown_text(f"{merged[0]}\n\n{merged[1]}")
+        if len(candidate) <= max_chunk_chars:
+            return [candidate, *merged[2:]]
+    return merged
 
 
 def find_chunk_end(text: str, cursor: int, max_chunk_chars: int) -> int:

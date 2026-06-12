@@ -34,7 +34,11 @@ class DdserveEmbeddingSettings:
     enabled: bool | None = None
     batch_size: int | None = None
     max_chunk_chars: int | None = None
+    min_chunk_chars: int | None = None
     overlap_chars: int | None = None
+    max_chunks_per_page: int | None = None
+    max_request_bytes: int | None = None
+    max_concurrent_requests: int | None = None
 
 
 @dataclass(frozen=True)
@@ -172,8 +176,32 @@ def _parse_ddserve_embedding_settings(
         max_chunk_chars=_optional_int(
             data, f"{path}.max_chunk_chars", "max_chunk_chars", "max-chunk-chars", "maxChunkChars"
         ),
+        min_chunk_chars=_optional_int(
+            data, f"{path}.min_chunk_chars", "min_chunk_chars", "min-chunk-chars", "minChunkChars"
+        ),
         overlap_chars=_optional_int(
             data, f"{path}.overlap_chars", "overlap_chars", "overlap-chars", "overlapChars"
+        ),
+        max_chunks_per_page=_optional_int(
+            data,
+            f"{path}.max_chunks_per_page",
+            "max_chunks_per_page",
+            "max-chunks-per-page",
+            "maxChunksPerPage",
+        ),
+        max_request_bytes=_optional_int(
+            data,
+            f"{path}.max_request_bytes",
+            "max_request_bytes",
+            "max-request-bytes",
+            "maxRequestBytes",
+        ),
+        max_concurrent_requests=_optional_int(
+            data,
+            f"{path}.max_concurrent_requests",
+            "max_concurrent_requests",
+            "max-concurrent-requests",
+            "maxConcurrentRequests",
         ),
     )
 

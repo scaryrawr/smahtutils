@@ -203,7 +203,7 @@ def handle_docs(args: argparse.Namespace, cache_root: str) -> None:
             config_path=args.config,
             on_progress=None if args.json else print_docs_progress("Installing"),
         )
-        print_results(results, args.json)
+        print_results(results, args.json, include_warnings=args.json)
         return
     if args.docs_command == "update":
         results = update_docsets(
@@ -214,7 +214,7 @@ def handle_docs(args: argparse.Namespace, cache_root: str) -> None:
             config_path=args.config,
             on_progress=None if args.json else print_docs_progress("Updating"),
         )
-        print_results(results, args.json)
+        print_results(results, args.json, include_warnings=args.json)
         return
     if args.docs_command == "remove":
         result = remove_docset(args.slug, cache_root)
@@ -275,16 +275,15 @@ def handle_search(args: argparse.Namespace, cache_root: str) -> None:
         print(results_to_text(results))
 
 
-def print_results(results: list[object], as_json: bool) -> None:
+def print_results(results: list[object], as_json: bool, include_warnings: bool = True) -> None:
     """Implement print results."""
     if as_json:
         print(json.dumps({"results": [to_jsonable(result) for result in results]}, indent=2))
         return
     for result in results:
-        print(
-            f"{result.slug}: {result.status} ({result.pages} pages, {result.skipped_entries} skipped)"
-        )
-        print_warnings(result.warnings)
+        print(f"{result.slug}: {result.status} ({format_install_result_counts(result)})")
+        if include_warnings:
+            print_warnings(result.warnings)
 
 
 def print_docs_progress(label: str):
@@ -297,14 +296,35 @@ def print_docs_progress(label: str):
         if phase == "start":
             print(f"{label} {slug} ({index}/{total})...", file=sys.stderr)
             return
+        if phase == "embedding" and isinstance(result, dict):
+            completed = int(result.get("completed", 0))
+            batches = int(result.get("total", 0))
+            interval = max(1, batches // 10)
+            if completed in {1, batches} or completed % interval == 0:
+                print(f"Embedding {slug}: {completed}/{batches} batches...", file=sys.stderr)
+            return
         if result is not None:
             print(
-                f"Finished {slug}: {result.status} "
-                f"({result.pages} pages, {result.skipped_entries} skipped)",
+                f"Finished {slug}: {result.status} ({format_install_result_counts(result)})",
                 file=sys.stderr,
             )
+            print_warnings(result.warnings)
 
     return print_progress
+
+
+def format_install_result_counts(result: object) -> str:
+    """Format install/update counters."""
+    parts = [f"{result.pages} pages", f"{result.skipped_entries} skipped"]
+    embedding_chunks = getattr(result, "embedding_chunks", 0)
+    if embedding_chunks:
+        parts.append(f"{getattr(result, 'embedded_chunks', 0)}/{embedding_chunks} embedded")
+        skipped_embeddings = getattr(result, "skipped_embedding_chunks", 0)
+        if skipped_embeddings:
+            parts.append(f"{skipped_embeddings} current")
+        if getattr(result, "annoy_indexed", False):
+            parts.append("search index ready")
+    return ", ".join(parts)
 
 
 def print_warnings(warnings: list[str]) -> None:

@@ -9,11 +9,18 @@ from wickedsmaht_config import Config as SharedConfig
 from wickedsmaht_config import ConfigError as SharedConfigError
 from wickedsmaht_config import config_path_from_home
 
-from .embeddings.chunks import DEFAULT_CHUNK_MAX_CHARS, DEFAULT_CHUNK_OVERLAP_CHARS
+from .embeddings.chunks import (
+    DEFAULT_CHUNK_MAX_CHARS,
+    DEFAULT_CHUNK_MIN_CHARS,
+    DEFAULT_CHUNK_OVERLAP_CHARS,
+    DEFAULT_MAX_CHUNKS_PER_PAGE,
+)
 from .errors import DdserveError
 
 DEFAULT_OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 DEFAULT_EMBEDDING_BATCH_SIZE = 64
+DEFAULT_EMBEDDING_MAX_REQUEST_BYTES = 256 * 1024
+DEFAULT_EMBEDDING_MAX_CONCURRENT_REQUESTS = 1
 DEFAULT_SERVE_BIND_ADDRESS = "127.0.0.1"
 DEFAULT_SERVE_PORT = 43877
 DEFAULT_SERVE_AUTH_TOKEN_ENV = "DDSERVE_API_TOKEN"
@@ -37,7 +44,11 @@ class EmbeddingsConfig:
     enabled: bool
     batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE
     max_chunk_chars: int = DEFAULT_CHUNK_MAX_CHARS
+    min_chunk_chars: int = DEFAULT_CHUNK_MIN_CHARS
     overlap_chars: int = DEFAULT_CHUNK_OVERLAP_CHARS
+    max_chunks_per_page: int = DEFAULT_MAX_CHUNKS_PER_PAGE
+    max_request_bytes: int = DEFAULT_EMBEDDING_MAX_REQUEST_BYTES
+    max_concurrent_requests: int = DEFAULT_EMBEDDING_MAX_CONCURRENT_REQUESTS
 
 
 @dataclass(frozen=True)
@@ -152,13 +163,37 @@ def build_embeddings_config(enabled_default: bool, settings: object) -> Embeddin
     enabled = getattr(settings, "enabled", None)
     batch_size = getattr(settings, "batch_size", None)
     max_chunk_chars = getattr(settings, "max_chunk_chars", None)
+    min_chunk_chars = getattr(settings, "min_chunk_chars", None)
     overlap_chars = getattr(settings, "overlap_chars", None)
+    max_chunks_per_page = getattr(settings, "max_chunks_per_page", None)
+    max_request_bytes = getattr(settings, "max_request_bytes", None)
+    max_concurrent_requests = getattr(settings, "max_concurrent_requests", None)
     batch_size = batch_size if batch_size is not None else DEFAULT_EMBEDDING_BATCH_SIZE
     max_chunk_chars = max_chunk_chars if max_chunk_chars is not None else DEFAULT_CHUNK_MAX_CHARS
+    min_chunk_chars = min_chunk_chars if min_chunk_chars is not None else DEFAULT_CHUNK_MIN_CHARS
     overlap_chars = overlap_chars if overlap_chars is not None else DEFAULT_CHUNK_OVERLAP_CHARS
+    max_chunks_per_page = (
+        max_chunks_per_page if max_chunks_per_page is not None else DEFAULT_MAX_CHUNKS_PER_PAGE
+    )
+    max_request_bytes = (
+        max_request_bytes if max_request_bytes is not None else DEFAULT_EMBEDDING_MAX_REQUEST_BYTES
+    )
+    max_concurrent_requests = (
+        max_concurrent_requests
+        if max_concurrent_requests is not None
+        else DEFAULT_EMBEDDING_MAX_CONCURRENT_REQUESTS
+    )
     validate_positive_int(batch_size, "ddserve.embeddings.batch_size")
     validate_positive_int(max_chunk_chars, "ddserve.embeddings.max_chunk_chars")
+    validate_positive_int(min_chunk_chars, "ddserve.embeddings.min_chunk_chars")
     validate_non_negative_int(overlap_chars, "ddserve.embeddings.overlap_chars")
+    validate_positive_int(max_chunks_per_page, "ddserve.embeddings.max_chunks_per_page")
+    validate_positive_int(max_request_bytes, "ddserve.embeddings.max_request_bytes")
+    validate_positive_int(max_concurrent_requests, "ddserve.embeddings.max_concurrent_requests")
+    if min_chunk_chars > max_chunk_chars:
+        raise DdserveError(
+            "Invalid ddserve.embeddings.min_chunk_chars: must not exceed max_chunk_chars"
+        )
     if overlap_chars >= max_chunk_chars:
         raise DdserveError(
             "Invalid ddserve.embeddings.overlap_chars: must be smaller than max_chunk_chars"
@@ -167,7 +202,11 @@ def build_embeddings_config(enabled_default: bool, settings: object) -> Embeddin
         enabled=enabled if enabled is not None else enabled_default,
         batch_size=batch_size,
         max_chunk_chars=max_chunk_chars,
+        min_chunk_chars=min_chunk_chars,
         overlap_chars=overlap_chars,
+        max_chunks_per_page=max_chunks_per_page,
+        max_request_bytes=max_request_bytes,
+        max_concurrent_requests=max_concurrent_requests,
     )
 
 
@@ -241,7 +280,11 @@ def redact_config(config: DdserveConfig) -> dict[str, object]:
             "enabled": config.embeddings.enabled,
             "batchSize": config.embeddings.batch_size,
             "maxChunkChars": config.embeddings.max_chunk_chars,
+            "minChunkChars": config.embeddings.min_chunk_chars,
             "overlapChars": config.embeddings.overlap_chars,
+            "maxChunksPerPage": config.embeddings.max_chunks_per_page,
+            "maxRequestBytes": config.embeddings.max_request_bytes,
+            "maxConcurrentRequests": config.embeddings.max_concurrent_requests,
         }
     }
     if config.openai:
