@@ -5,6 +5,8 @@ from .service import AppState, index_path, list_indexed, query_code, status
 
 
 async def serve(state: AppState) -> None:
+    """Serve smahties tools over the MCP stdio transport."""
+
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:

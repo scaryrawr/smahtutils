@@ -10,10 +10,14 @@ CONFIG_FILE_NAME = "config.json"
 
 
 class ConfigError(Exception):
+    """Raised when shared configuration cannot be loaded or parsed."""
+
     pass
 
 
 class SettingError(Exception):
+    """Raised when a required setting is missing from CLI args and config."""
+
     def __init__(self, flag_name: str, config_key: str) -> None:
         self.flag_name = flag_name
         self.config_key = config_key
@@ -25,12 +29,16 @@ class SettingError(Exception):
 
 @dataclass(frozen=True)
 class Config:
+    """Shared optional defaults loaded from .wickedsmaht/config.json."""
+
     base_url: str | None = None
     model: str | None = None
     coding_embedding_model: str | None = None
 
     @classmethod
     def load(cls) -> "Config":
+        """Load configuration from the default path under HOME."""
+
         home = os.environ.get("HOME")
         if not home:
             raise ConfigError(
@@ -40,6 +48,8 @@ class Config:
 
     @classmethod
     def load_from_path(cls, path: str | os.PathLike[str]) -> "Config":
+        """Load configuration from an explicit JSON file path."""
+
         config_path = Path(path)
         try:
             raw = config_path.read_text(encoding="utf-8")
@@ -65,6 +75,8 @@ class Config:
 
 
 def config_path_from_home(home: str | os.PathLike[str]) -> Path:
+    """Build the default config path for a home directory."""
+
     return Path(home) / CONFIG_DIR_NAME / CONFIG_FILE_NAME
 
 
@@ -74,6 +86,8 @@ def resolve_setting(
     flag_name: str,
     config_key: str,
 ) -> str:
+    """Resolve a required setting, preferring CLI value over config value."""
+
     if cli_value is not None:
         return cli_value
     if config_value is not None:

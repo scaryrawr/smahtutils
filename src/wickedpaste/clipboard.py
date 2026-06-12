@@ -8,6 +8,8 @@ from typing import Any
 
 
 def clipboard_image_data_url(image: Any) -> str:
+    """Encode a clipboard image object as a PNG data URL for chat APIs."""
+
     width, height = image.size
     if width <= 0 or height <= 0:
         raise ValueError("invalid clipboard image data")
@@ -17,6 +19,8 @@ def clipboard_image_data_url(image: Any) -> str:
 
 
 def get_clipboard_content() -> dict[str, object] | None:
+    """Read clipboard content as an OpenAI chat content part, preferring images."""
+
     image = get_clipboard_image()
     if image is not None:
         return {"type": "image_url", "image_url": {"url": clipboard_image_data_url(image)}}
@@ -27,6 +31,8 @@ def get_clipboard_content() -> dict[str, object] | None:
 
 
 def get_clipboard_image() -> Any | None:
+    """Return an image from the system clipboard when Pillow can read one."""
+
     try:
         from PIL import ImageGrab
 
@@ -37,6 +43,8 @@ def get_clipboard_image() -> Any | None:
 
 
 def get_clipboard_text() -> str | None:
+    """Return text from the system clipboard using platform clipboard commands."""
+
     system = platform.system()
     commands: list[list[str]]
     if system == "Darwin":

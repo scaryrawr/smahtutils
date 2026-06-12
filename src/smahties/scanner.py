@@ -12,11 +12,15 @@ EXCLUDED_FILE_NAMES = {".gitignore", ".ignore", ".gitattributes", ".gitmodules"}
 
 
 class Scanner:
+    """Discovers and reads indexable UTF-8 source files under a root."""
+
     def __init__(self, root: Path, max_file_bytes: int = DEFAULT_MAX_FILE_BYTES) -> None:
         self.root = root
         self.max_file_bytes = max_file_bytes
 
     def discover_files(self, path: Path) -> list[Path]:
+        """Return indexable files under a file or directory path."""
+
         if is_excluded_path(self.root, path):
             return []
         if path.is_file():
@@ -40,6 +44,8 @@ class Scanner:
         return files
 
     def read_source(self, path: Path) -> SourceFile | None:
+        """Read an indexable source file, skipping binary or non-UTF-8 data."""
+
         if not self.is_indexable_path(path):
             return None
         data = path.read_bytes()
@@ -57,9 +63,13 @@ class Scanner:
         )
 
     def is_discoverable_file(self, path: Path) -> bool:
+        """Return whether a file would be found by discovery rules."""
+
         return path in self.discover_files(path)
 
     def relative_path(self, path: Path) -> str:
+        """Return a POSIX-style path relative to the scanner root."""
+
         try:
             relative = path.relative_to(self.root)
         except ValueError:
@@ -67,9 +77,13 @@ class Scanner:
         return relative.as_posix()
 
     def resolve_existing_under_root(self, requested: str) -> Path:
+        """Resolve an existing requested path under the scanner root."""
+
         return self.resolve_existing_under(self.root, requested)
 
     def resolve_existing_under(self, base: Path, requested: str) -> Path:
+        """Resolve an existing requested path without escaping root or scope."""
+
         requested_path = Path(requested)
         absolute = requested_path if requested_path.is_absolute() else base / requested_path
         root = self.root.resolve()
@@ -84,6 +98,8 @@ class Scanner:
         return canonical
 
     def is_indexable_path(self, path: Path) -> bool:
+        """Return whether a path is an indexable file under scanner limits."""
+
         if not path.is_relative_to(self.root) or is_excluded_path(self.root, path):
             return False
         try:
@@ -94,6 +110,8 @@ class Scanner:
 
 
 def ensure_state_dir(root: Path) -> Path:
+    """Create the .smahties state directory and ignore all generated contents."""
+
     state_dir = root / ".smahties"
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / ".gitignore").write_text("*\n", encoding="utf-8")
@@ -101,10 +119,14 @@ def ensure_state_dir(root: Path) -> Path:
 
 
 def sha256_hex(data: bytes) -> str:
+    """Return a lowercase SHA-256 hex digest for bytes."""
+
     return hashlib.sha256(data).hexdigest()
 
 
 def is_excluded_path(root: Path, path: Path) -> bool:
+    """Return whether a path contains an excluded directory or file component."""
+
     try:
         relative = path.relative_to(root)
     except ValueError:

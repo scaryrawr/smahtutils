@@ -20,6 +20,8 @@ MAX_INDEXER_BATCH_WORK_ITEMS = 128
 
 @dataclass
 class IndexRunSummary:
+    """Counts of indexing work completed, requeued, and failed in a run."""
+
     completed: int = 0
     requeued: int = 0
     failed: int = 0
@@ -27,12 +29,16 @@ class IndexRunSummary:
 
 @dataclass(frozen=True)
 class IndexRunOutcome:
+    """Final status and summary for a blocking indexing command."""
+
     status: str
     summary: IndexRunSummary
 
 
 @dataclass(frozen=True)
 class PreparedFile:
+    """Parsed source file ready to be embedded and committed."""
+
     source_file: SourceFile
     parser_key: str
     units: list[CodeUnit]
@@ -40,6 +46,8 @@ class PreparedFile:
 
 @dataclass(frozen=True)
 class PreparedEmbeddingWork:
+    """Claimed queue item plus parsed units awaiting embedding."""
+
     item: QueuedWork
     claim: "WorkClaim"
     source_file: SourceFile
@@ -48,6 +56,8 @@ class PreparedEmbeddingWork:
 
 
 class Indexer:
+    """Queue-backed indexer that parses files, embeds units, and commits them."""
+
     def __init__(
         self, scanner: Scanner, parser: ParserRegistry, store: Store, embedder: OpenAiEmbedder
     ) -> None:
@@ -59,24 +69,36 @@ class Indexer:
         self._notify = asyncio.Event()
 
     def root(self) -> Path:
+        """Return the root path being indexed."""
+
         return self.scanner.root
 
     async def enqueue_requested_path_under(self, requested: str, base: Path) -> None:
+        """Resolve and enqueue a user-requested path under an active scope."""
+
         path = self.scanner.resolve_existing_under(base, requested)
         await self.enqueue_path(path, Priority.HIGH)
 
     async def enqueue_path(self, path: Path, priority: Priority) -> None:
+        """Enqueue an indexing request for a file or directory path."""
+
         self.store.enqueue_work(path, priority, False)
         self._notify.set()
 
     async def enqueue_delete(self, path: Path) -> None:
+        """Enqueue deletion of indexed state for a removed path."""
+
         self.store.enqueue_work(path, Priority.HIGH, True)
         self._notify.set()
 
     def spawn_worker(self) -> asyncio.Task[None]:
+        """Start the background indexing worker task."""
+
         return asyncio.create_task(self.worker_loop())
 
     async def run_until_idle_or_interrupt(self) -> IndexRunOutcome:
+        """Process queued work until the queue is idle."""
+
         summary = IndexRunSummary()
         while True:
             if not self.acquire_lease():
@@ -90,12 +112,18 @@ class Indexer:
             summary.failed += outcome.failed
 
     def queue_stats(self) -> QueueStats:
+        """Return current queue counts."""
+
         return self.store.queue_stats()
 
     def lease_status(self) -> LeaseStatus:
+        """Return current indexer lease status for this process."""
+
         return self.store.lease_status(INDEXER_LEASE_NAME, self.owner)
 
     async def worker_loop(self) -> None:
+        """Continuously process queue work for MCP background indexing."""
+
         while True:
             try:
                 if not self.acquire_lease():
@@ -112,9 +140,13 @@ class Indexer:
                 await asyncio.sleep(1)
 
     def acquire_lease(self) -> bool:
+        """Acquire or renew the indexer process lease."""
+
         return self.store.acquire_lease(INDEXER_LEASE_NAME, self.owner, INDEXER_LEASE_TTL_SECONDS)
 
     async def process_next_work(self) -> IndexRunSummary | None:
+        """Claim and process one batch of queue work, returning None when idle."""
+
         summary = IndexRunSummary()
         batch: list[PreparedEmbeddingWork] = []
         claimed = 0
@@ -148,6 +180,8 @@ class Indexer:
         return summary
 
     async def prepare_item(self, item: QueuedWork) -> PreparedFile | None:
+        """Prepare a claimed item for embedding or complete it without embedding."""
+
         if item.delete or not item.path.exists():
             rel = self.scanner.relative_path(item.path)
             self.store.delete_path_prefix(rel)
@@ -176,6 +210,8 @@ class Indexer:
         batch: list[PreparedEmbeddingWork],
         summary: IndexRunSummary,
     ) -> None:
+        """Embed prepared units and atomically commit unchanged source files."""
+
         if not batch:
             return
         texts = [unit.source for work in batch for unit in work.units]
@@ -230,6 +266,8 @@ class Indexer:
         error: Exception,
         summary: IndexRunSummary,
     ) -> None:
+        """Requeue failed claimed work and persist the indexing error."""
+
         changed = claim.requeue(str(error))
         if changed:
             self.store.mark_error(self.scanner.relative_path(item.path), str(error))
@@ -237,6 +275,8 @@ class Indexer:
 
 
 class WorkClaim:
+    """Active ownership guard for an in-progress queue item."""
+
     def __init__(self, store: Store, id_: int, owner: str) -> None:
         self.store = store
         self.id = id_
@@ -244,10 +284,14 @@ class WorkClaim:
         self.active = True
 
     def complete(self) -> None:
+        """Complete the claimed work item when still owned by this process."""
+
         self.store.complete_work_for_owner(self.id, self.owner)
         self.active = False
 
     def requeue(self, reason: str) -> bool:
+        """Return claimed work to pending state with an error or retry reason."""
+
         changed = self.store.fail_work_for_owner(self.id, self.owner, reason)
         self.active = False
         return changed

@@ -10,6 +10,8 @@ from .store import Store
 
 
 class AnnoyIndexManager:
+    """Build, load, and query rebuildable Annoy sidecar indexes."""
+
     def __init__(self, state_dir: Path, store: Store, trees: int = 10) -> None:
         self.state_dir = state_dir
         self.store = store
@@ -19,6 +21,8 @@ class AnnoyIndexManager:
         self._loaded: dict[str, tuple[str, AnnoyIndex]] = {}
 
     def search(self, model: str, query_embedding: list[float], n: int) -> list[str]:
+        """Return candidate code unit IDs for a query embedding."""
+
         index = self._ensure_loaded(model)
         if index is None:
             return []

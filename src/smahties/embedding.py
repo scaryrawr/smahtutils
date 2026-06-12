@@ -11,11 +11,15 @@ DEFAULT_MAX_EMBEDDING_BATCH_BYTES = 256 * 1024
 
 @dataclass(frozen=True)
 class EmbeddingBatchLimits:
+    """Maximum OpenAI embedding request size limits."""
+
     max_inputs: int = DEFAULT_MAX_EMBEDDING_BATCH_INPUTS
     max_request_bytes: int = DEFAULT_MAX_EMBEDDING_BATCH_BYTES
 
 
 class OpenAiEmbedder:
+    """OpenAI-compatible embedding client with deterministic batching."""
+
     def __init__(
         self, base_url: str, model: str, limits: EmbeddingBatchLimits | None = None
     ) -> None:
@@ -27,6 +31,8 @@ class OpenAiEmbedder:
         self.limits = limits or EmbeddingBatchLimits()
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts in request-sized batches and preserve input order."""
+
         embeddings: list[list[float]] = []
         for start, end in embedding_batch_ranges(texts, self.limits):
             response = await self.client.embeddings.create(model=self.model, input=texts[start:end])
@@ -48,6 +54,8 @@ def embedding_batch_ranges(
     texts: list[str],
     limits: EmbeddingBatchLimits,
 ) -> list[tuple[int, int]]:
+    """Return half-open input ranges that fit embedding request limits."""
+
     if limits.max_inputs <= 0 or limits.max_request_bytes <= 0:
         raise ValueError("embedding batch limits must be greater than zero")
     ranges: list[tuple[int, int]] = []

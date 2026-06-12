@@ -24,6 +24,8 @@ SQLITE_BUSY_TIMEOUT_SECONDS = 30
 
 
 class Store:
+    """Thread-safe SQLite store for indexing state, FTS, queueing, and Annoy metadata."""
+
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
@@ -137,6 +139,8 @@ class Store:
             self.ensure_lexical_index_current()
 
     def ensure_lexical_index_current(self) -> None:
+        """Repair the FTS table when it has drifted from code_units."""
+
         indexed_units = self._conn.execute("SELECT COUNT(*) FROM code_units").fetchone()[0]
         lexical_units = self._conn.execute("SELECT COUNT(*) FROM code_units_fts").fetchone()[0]
         if indexed_units == lexical_units:
@@ -157,6 +161,8 @@ class Store:
         self._conn.commit()
 
     def file_complete_for_model(self, path: str, hash_: str, parser_key: str, model: str) -> bool:
+        """Return whether a file is fully indexed for the parser and embedding model."""
+
         with self._lock:
             row = self._conn.execute(
                 """
@@ -186,6 +192,8 @@ class Store:
         model: str,
         embeddings: list[list[float]],
     ) -> None:
+        """Replace all indexed units and embeddings for one source file."""
+
         if len(units) != len(embeddings):
             raise ValueError(
                 f"embedding response count {len(embeddings)} did not match file unit count {len(units)}"
@@ -247,6 +255,8 @@ class Store:
                 )
 
     def mark_error(self, path: str, error: str) -> None:
+        """Persist the latest indexing error for a source path."""
+
         with self._lock, self._conn:
             self._conn.execute(
                 """
@@ -261,11 +271,15 @@ class Store:
             )
 
     def delete_file(self, path: str) -> None:
+        """Delete indexed state for one source file."""
+
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM code_units_fts WHERE file_path = ?", (path,))
             self._conn.execute("DELETE FROM files WHERE path = ?", (path,))
 
     def delete_path_prefix(self, prefix: str) -> None:
+        """Delete indexed state for a path and all children under it."""
+
         with self._lock, self._conn:
             self._conn.execute(
                 "DELETE FROM code_units_fts WHERE file_path = ? OR file_path LIKE ?",
@@ -277,6 +291,8 @@ class Store:
             )
 
     def delete_file_name(self, file_name: str) -> None:
+        """Delete indexed state for files matching an excluded file name."""
+
         with self._lock, self._conn:
             self._conn.execute(
                 "DELETE FROM code_units_fts WHERE file_path = ? OR file_path LIKE ?",
@@ -288,6 +304,8 @@ class Store:
             )
 
     def enqueue_work(self, path: Path, priority: Priority, delete: bool) -> None:
+        """Insert or reprioritize pending indexing or delete work."""
+
         now = unix_now()
         path_text = str(path)
         delete_path = int(delete)
@@ -311,6 +329,8 @@ class Store:
             )
 
     def claim_next_work(self, owner: str, stale_after_seconds: int) -> QueuedWork | None:
+        """Claim the next pending queue item, reclaiming stale work first."""
+
         now = unix_now()
         stale_cutoff = now - stale_after_seconds
         with self._lock, self._conn:
@@ -353,12 +373,16 @@ class Store:
         )
 
     def complete_work_for_owner(self, id_: int, owner: str) -> None:
+        """Delete a queue item when it is still owned by the caller."""
+
         with self._lock, self._conn:
             self._conn.execute(
                 "DELETE FROM work_queue WHERE id = ? AND claimed_by = ?", (id_, owner)
             )
 
     def fail_work_for_owner(self, id_: int, owner: str, error: str) -> bool:
+        """Return owned work to pending state and record the failure reason."""
+
         now = unix_now()
         with self._lock, self._conn:
             changed = self._conn.execute(
@@ -376,6 +400,8 @@ class Store:
         return changed > 0
 
     def queue_stats(self) -> QueueStats:
+        """Return counts for pending high/low priority and in-progress work."""
+
         with self._lock:
             rows = self._conn.execute(
                 "SELECT status, priority, COUNT(*) AS count FROM work_queue GROUP BY status, priority"
@@ -391,6 +417,8 @@ class Store:
         return QueueStats(high, low, in_progress)
 
     def acquire_lease(self, name: str, owner: str, ttl_seconds: int) -> bool:
+        """Acquire or renew a named lease if it is free or expired."""
+
         now = unix_now()
         expires_at = now + ttl_seconds
         with self._lock, self._conn:
@@ -410,6 +438,8 @@ class Store:
         return True
 
     def lease_status(self, name: str, owner: str) -> LeaseStatus:
+        """Return the current status of a named process lease."""
+
         with self._lock:
             row = self._conn.execute(
                 "SELECT owner, expires_at FROM process_leases WHERE name = ?", (name,)
@@ -419,6 +449,8 @@ class Store:
         return LeaseStatus(row["owner"], row["expires_at"], row["owner"] == owner)
 
     def stats(self) -> StoreStats:
+        """Return aggregate store counts and recent file errors."""
+
         with self._lock:
             indexed_files = self._conn.execute(
                 "SELECT COUNT(*) FROM files WHERE status = 'indexed'"
@@ -449,6 +481,8 @@ class Store:
         language: str | None,
         limit: int,
     ) -> list[LexicalMatch]:
+        """Search the FTS index with optional path and language filters."""
+
         clauses = ["code_units_fts MATCH ?"]
         params: list[object] = [query]
         if path_prefix:
@@ -471,6 +505,8 @@ class Store:
         return [LexicalMatch(_code_unit_from_row(row), float(row["rank"])) for row in rows]
 
     def code_units_by_ids(self, ids: Iterable[str]) -> list[CodeUnit]:
+        """Load code units for IDs, preserving database row contents."""
+
         ids = list(dict.fromkeys(ids))
         if not ids:
             return []
@@ -484,6 +520,8 @@ class Store:
     def embedding_candidates_by_ids(
         self, model: str, ids: Iterable[str]
     ) -> list[StoredEmbeddingCandidate]:
+        """Load stored embedding vectors for exact candidate scoring."""
+
         ids = list(dict.fromkeys(ids))
         if not ids:
             return []
@@ -504,6 +542,8 @@ class Store:
         ]
 
     def embedding_rows_for_model(self, model: str) -> list[StoredEmbeddingCandidate]:
+        """Load all embeddings for a model in stable order for Annoy rebuilds."""
+
         with self._lock:
             rows = self._conn.execute(
                 "SELECT unit_id, vector, norm FROM embeddings WHERE model = ? ORDER BY unit_id",
@@ -517,6 +557,8 @@ class Store:
         ]
 
     def embedding_index_version(self, model: str) -> str:
+        """Return a compact version string for a model's embedding set."""
+
         with self._lock:
             row = self._conn.execute(
                 "SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS updated FROM embeddings WHERE model = ?",
@@ -525,6 +567,8 @@ class Store:
         return f"{row['count']}:{row['updated']}"
 
     def annoy_index_metadata(self, model: str) -> sqlite3.Row | None:
+        """Return persisted Annoy sidecar metadata for a model."""
+
         with self._lock:
             return self._conn.execute(
                 "SELECT * FROM annoy_indexes WHERE model = ?", (model,)
@@ -538,6 +582,8 @@ class Store:
         path: Path,
         unit_ids: list[str],
     ) -> None:
+        """Replace Annoy integer-ID mappings and sidecar metadata for a model."""
+
         with self._lock, self._conn:
             self._conn.execute("DELETE FROM annoy_items WHERE model = ?", (model,))
             for annoy_id, unit_id in enumerate(unit_ids):
@@ -560,6 +606,8 @@ class Store:
             )
 
     def annoy_unit_ids(self, model: str, annoy_ids: Iterable[int]) -> list[str]:
+        """Translate Annoy integer IDs to code unit IDs in input order."""
+
         ids = list(annoy_ids)
         if not ids:
             return []
@@ -583,6 +631,8 @@ class Store:
         offset: int,
         include_source: bool,
     ) -> list[IndexedItem]:
+        """List indexed units with optional filters, pagination, and source."""
+
         clauses: list[str] = []
         params: list[object] = []
         if path_prefix:
@@ -637,4 +687,6 @@ def _code_unit_from_row(row: sqlite3.Row) -> CodeUnit:
 
 
 def unix_now() -> int:
+    """Return current Unix time in seconds."""
+
     return int(time.time())

@@ -22,6 +22,8 @@ def build_state(
     coding_embedding_model: str | None,
     api_required: bool,
 ) -> AppState:
+    """Build the shared application state for CLI or MCP execution."""
+
     context = RuntimeContext.resolve(root)
     state_dir = context.state_dir()
     resolved_base_url, model = resolve_api_settings(base_url, coding_embedding_model, api_required)
@@ -42,6 +44,8 @@ def resolve_api_settings(
     coding_embedding_model: str | None,
     api_required: bool,
 ) -> tuple[str, str]:
+    """Resolve embedding API settings, optionally allowing missing values."""
+
     config = Config() if base_url and coding_embedding_model else Config.load()
     if not api_required:
         return (
@@ -60,6 +64,8 @@ def resolve_api_settings(
 
 
 async def start_mcp_state(state: AppState) -> PollingWatcher | None:
+    """Start background indexing and file watching for an MCP server."""
+
     state.indexer.spawn_worker()
     if auto_index_root := state.context.auto_index_root():
         await state.indexer.enqueue_path(auto_index_root, Priority.LOW)

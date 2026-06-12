@@ -13,10 +13,14 @@ from .service import index_path, list_indexed, query_code, status
 
 
 def main() -> None:
+    """Run the smahties command-line entry point."""
+
     asyncio.run(async_main())
 
 
 async def async_main() -> None:
+    """Dispatch CLI subcommands or start the MCP stdio server."""
+
     parser = build_parser()
     args = parser.parse_args()
     command = args.command
@@ -77,6 +81,8 @@ async def async_main() -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the smahties argument parser and subcommands."""
+
     parser = argparse.ArgumentParser(prog="smahties")
     parser.add_argument(
         "--root", default=".", help="Repository or local coding directory to serve."
@@ -114,6 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def print_json_or_query(response: object, as_json: bool) -> None:
+    """Print query results as JSON or compact human-readable snippets."""
+
     if as_json:
         print(json.dumps(to_jsonable(response), indent=2))
         return
@@ -132,6 +140,8 @@ def print_json_or_query(response: object, as_json: bool) -> None:
 
 
 def print_json_or_status(response: object, as_json: bool) -> None:
+    """Print status output as JSON or human-readable text."""
+
     if as_json:
         print(json.dumps(to_jsonable(response), indent=2))
         return
@@ -153,6 +163,8 @@ def print_json_or_status(response: object, as_json: bool) -> None:
 
 
 def print_json_or_list(response: object, as_json: bool) -> None:
+    """Print indexed-unit listings as JSON or human-readable text."""
+
     if as_json:
         print(json.dumps(to_jsonable(response), indent=2))
         return

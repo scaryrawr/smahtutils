@@ -19,10 +19,14 @@ SYSTEM_PROMPT = (
 
 
 def main() -> None:
+    """Run the wickedpaste command-line entry point."""
+
     asyncio.run(async_main())
 
 
 async def async_main() -> None:
+    """Parse CLI settings, read the clipboard, and print converted JSON."""
+
     parser = argparse.ArgumentParser(prog="wickedpaste")
     parser.add_argument("--base-url", dest="base_url")
     parser.add_argument("--model")
@@ -74,6 +78,8 @@ async def async_main() -> None:
 
 
 def resolve_api_settings(base_url: str | None, model: str | None) -> tuple[str, str]:
+    """Resolve wickedpaste API settings from CLI args and shared config."""
+
     config = Config() if base_url and model else Config.load()
     return (
         resolve_setting(base_url, config.base_url, "--base-url", "base_url"),

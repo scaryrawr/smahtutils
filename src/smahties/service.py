@@ -23,6 +23,8 @@ from .vector import cosine_similarity_with_norms, vector_norm
 
 @dataclass(frozen=True)
 class AppState:
+    """Shared dependencies used by CLI commands and MCP tools."""
+
     store: Store
     indexer: Indexer
     embedder: OpenAiEmbedder
@@ -31,6 +33,8 @@ class AppState:
 
 
 async def status(state: AppState) -> ServiceStatus:
+    """Return current indexing, store, scope, and lease status."""
+
     state.store.ensure_lexical_index_current()
     return ServiceStatus(
         root=str(state.indexer.root()),
@@ -48,6 +52,8 @@ async def status(state: AppState) -> ServiceStatus:
 
 
 async def index_path(state: AppState, path: str) -> IndexResponse:
+    """Queue high-priority indexing for a path under the active scope."""
+
     await state.indexer.enqueue_requested_path_under(path, state.context.runtime_root)
     return IndexResponse(True, path)
 
@@ -60,6 +66,8 @@ async def query_code(
     path_prefix: str | None = None,
     language: str | None = None,
 ) -> QueryResponse:
+    """Search indexed code using semantic, keyword, or hybrid ranking."""
+
     actual_limit = max(1, min(limit or 10, 100))
     actual_mode = QueryMode(mode or QueryMode.HYBRID)
     scoped_prefix = state.context.scoped_path_prefix(path_prefix)
@@ -108,6 +116,8 @@ def semantic_top_matches(
     limit: int,
     required_unit_ids: set[str],
 ) -> list[tuple[CodeUnit, float]]:
+    """Fetch Annoy candidates and exact-score filtered semantic matches."""
+
     query_norm = vector_norm(query_embedding)
     if query_norm == 0.0:
         return []
@@ -147,6 +157,8 @@ def merge_matches(
     semantic_matches: list[tuple[CodeUnit, float]],
     lexical_matches: list[LexicalMatch],
 ) -> list[QueryMatch]:
+    """Combine semantic and lexical candidates into scored query matches."""
+
     lexical_scores = normalize_lexical_scores(lexical_matches)
     candidates: dict[str, CandidateMatch] = {}
     for unit, score in semantic_matches:
@@ -160,11 +172,15 @@ def merge_matches(
 
 @dataclass
 class CandidateMatch:
+    """Mutable accumulator for semantic and lexical scores for one unit."""
+
     unit: CodeUnit
     semantic_score: float | None = None
     lexical_score: float | None = None
 
     def into_query_match(self, mode: QueryMode) -> QueryMatch:
+        """Convert accumulated scores into the public query match shape."""
+
         semantic_normalized = (
             max(0.0, min(1.0, (self.semantic_score + 1.0) / 2.0))
             if self.semantic_score is not None
@@ -194,6 +210,8 @@ class CandidateMatch:
 
 
 def normalize_lexical_scores(matches: list[LexicalMatch]) -> list[float]:
+    """Normalize SQLite FTS ranks into descending 0..1 scores."""
+
     if not matches:
         return []
     ranks = [match.rank for match in matches]
@@ -205,6 +223,8 @@ def normalize_lexical_scores(matches: list[LexicalMatch]) -> list[float]:
 
 
 def build_fts_query(query: str) -> str | None:
+    """Build a safe SQLite FTS prefix query from user text."""
+
     tokens: list[str] = []
     for raw in query.replace("_", " ").split():
         token = "".join(ch for ch in raw.lower() if ch.isalnum() or ch == "_")
@@ -223,6 +243,8 @@ def list_indexed(
     offset: int | None = None,
     include_source: bool | None = None,
 ) -> IndexedListResponse:
+    """List indexed units with optional path, language, and source filters."""
+
     actual_limit = max(1, min(limit or 50, 200))
     actual_offset = offset or 0
     actual_include_source = bool(include_source) and actual_limit <= 20

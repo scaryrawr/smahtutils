@@ -9,14 +9,20 @@ from .scanner import is_excluded_path
 
 
 class PollingWatcher:
+    """Handle for an asyncio polling watcher task."""
+
     def __init__(self, task: asyncio.Task[None]) -> None:
         self.task = task
 
     def cancel(self) -> None:
+        """Cancel the watcher task."""
+
         self.task.cancel()
 
 
 def start(root: Path, indexer: Indexer, interval_seconds: float = 2.0) -> PollingWatcher:
+    """Start polling a root for file changes and enqueue indexing work."""
+
     task = asyncio.create_task(_poll(root, indexer, interval_seconds))
     return PollingWatcher(task)
 

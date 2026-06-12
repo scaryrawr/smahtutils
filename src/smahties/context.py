@@ -6,6 +6,8 @@ from .scanner import ensure_state_dir
 
 
 class RuntimeContext:
+    """Resolved repository, storage, and runtime scope for a smahties process."""
+
     def __init__(
         self,
         repository_root: Path | None,
@@ -22,6 +24,8 @@ class RuntimeContext:
 
     @classmethod
     def resolve(cls, runtime_root: Path) -> "RuntimeContext":
+        """Resolve repository-aware runtime context for a requested root path."""
+
         runtime_root = runtime_root.resolve()
         repository_root = find_git_root(runtime_root)
         storage_root = repository_root or runtime_root
@@ -38,12 +42,18 @@ class RuntimeContext:
         )
 
     def auto_index_root(self) -> Path | None:
+        """Return the path to auto-index, or None when auto-indexing is disabled."""
+
         return self.runtime_root if self.auto_indexing_enabled else None
 
     def state_dir(self) -> Path:
+        """Ensure and return the persistent .smahties state directory."""
+
         return ensure_state_dir(self.storage_root)
 
     def scoped_path_prefix(self, requested: str | None) -> str | None:
+        """Normalize a query/list path prefix under the active runtime scope."""
+
         normalized = normalize_relative_prefix(requested) if requested else None
         if self.scope_prefix and normalized and path_prefix_contains(self.scope_prefix, normalized):
             return normalized
@@ -55,6 +65,8 @@ class RuntimeContext:
 
 
 def find_git_root(start: Path) -> Path | None:
+    """Find the nearest ancestor containing a Git directory or worktree marker."""
+
     current = start.parent if start.is_file() else start
     while True:
         marker = current / ".git"
@@ -66,6 +78,8 @@ def find_git_root(start: Path) -> Path | None:
 
 
 def normalize_relative_prefix(value: str) -> str | None:
+    """Normalize a user path prefix and reject absolute or escaping paths."""
+
     normalized = value.replace("\\", "/")
     path = PurePosixPath(normalized)
     if path.is_absolute():
@@ -81,8 +95,12 @@ def normalize_relative_prefix(value: str) -> str | None:
 
 
 def path_prefix_contains(scope: str, prefix: str) -> bool:
+    """Return whether prefix already includes the active scope."""
+
     return prefix == scope or prefix.startswith(f"{scope}/")
 
 
 def join_path_prefix(scope: str, prefix: str) -> str:
+    """Join an active scope and a relative prefix using POSIX separators."""
+
     return prefix if not scope else f"{scope}/{prefix}"

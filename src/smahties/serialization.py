@@ -7,6 +7,8 @@ from typing import Any
 
 
 def to_jsonable(value: Any) -> Any:
+    """Convert dataclasses, enums, paths, and containers into JSON-safe values."""
+
     if is_dataclass(value):
         return {key: to_jsonable(item) for key, item in asdict(value).items()}
     if isinstance(value, Enum):
