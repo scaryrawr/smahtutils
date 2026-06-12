@@ -2,8 +2,8 @@
   "mcpServers": {
     "smahties": {
       "type": "local",
-      "command": "cargo",
-      "args": ["run", "--bin", "smahties"],
+      "command": "uv",
+      "args": ["run", "smahties"],
       "tools": ["*"]
     }
   }
