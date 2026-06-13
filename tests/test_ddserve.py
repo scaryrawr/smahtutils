@@ -18,8 +18,18 @@ from ddserve.config import (
 )
 from ddserve.devdocs import normalize_docsets
 from ddserve.embeddings.annoy_index import AnnoyIndexManager
-from ddserve.embeddings.chunks import chunk_markdown_pages, split_markdown_into_chunks
-from ddserve.embeddings.index import create_embedding_vectors_async, rebuild_docset_embeddings
+from ddserve.embeddings.chunks import (
+    ChunkedMarkdownPages,
+    ChunkingStats,
+    PreparedEmbeddingChunk,
+    chunk_markdown_pages,
+    split_markdown_into_chunks,
+)
+from ddserve.embeddings.index import (
+    create_docset_embedding_vectors,
+    create_embedding_vectors_async,
+    rebuild_docset_embeddings,
+)
 from ddserve.embeddings.openai import EmbeddingBatchLimits, embedding_batch_ranges
 from ddserve.embeddings.storage import open_embedding_storage
 from ddserve.http import HttpClient
@@ -308,6 +318,78 @@ def test_async_embedding_batches_preserve_order_and_limit_concurrency() -> None:
 
     client = asyncio.run(run())
     assert client.max_active == 2
+
+
+def test_created_async_embedding_client_closes_before_event_loop_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Validate internally created async embedding clients close in their event loop."""
+    events: list[tuple[str, int, bool]] = []
+
+    class ManagedAsyncClient:
+        """Represent ManagedAsyncClient."""
+
+        async def create_embeddings(self, input_):
+            """Implement create embeddings."""
+            loop = asyncio.get_running_loop()
+            events.append(("create", id(loop), loop.is_closed()))
+            values = [input_] if isinstance(input_, str) else list(input_)
+            return [[float(len(value)), 0.0] for value in values]
+
+        async def aclose(self) -> None:
+            """Implement aclose."""
+            loop = asyncio.get_running_loop()
+            events.append(("close", id(loop), loop.is_closed()))
+
+    def create_client(_config, _env):
+        loop = asyncio.get_running_loop()
+        events.append(("factory", id(loop), loop.is_closed()))
+        return ManagedAsyncClient()
+
+    monkeypatch.setattr(
+        "ddserve.embeddings.index.create_openai_async_embedding_client", create_client
+    )
+
+    chunked = ChunkedMarkdownPages(
+        docset={"slug": "http"},
+        chunks=[
+            PreparedEmbeddingChunk(
+                page={"slug": "http", "path": "alpha"},
+                ordinal=0,
+                content_hash="hash-alpha",
+                source_hash="source-alpha",
+                text="alpha",
+                token_count=1,
+                metadata_json="{}",
+            ),
+            PreparedEmbeddingChunk(
+                page={"slug": "http", "path": "beta"},
+                ordinal=1,
+                content_hash="hash-beta",
+                source_hash="source-beta",
+                text="beta",
+                token_count=1,
+                metadata_json="{}",
+            ),
+        ],
+        stats=ChunkingStats(pages=1),
+    )
+
+    vectors = create_docset_embedding_vectors(
+        chunked,
+        DdserveConfig(
+            embeddings=EmbeddingsConfig(enabled=True),
+            openai=OpenAiConfig(embedding_model="embed"),
+        ),
+        env={},
+        client=None,
+        async_client=None,
+    )
+
+    assert vectors == [[5.0, 0.0], [4.0, 0.0]]
+    assert [event[0] for event in events] == ["factory", "create", "close"]
+    assert len({event[1] for event in events}) == 1
+    assert all(not event[2] for event in events)
 
 
 def test_install_docset_writes_manifests_and_pages(tmp_path: Path) -> None:

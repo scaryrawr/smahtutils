@@ -193,12 +193,22 @@ def create_docset_embedding_vectors(
     )
     if client is not None:
         return create_embedding_vectors_sync(texts, limits, client, on_embedding_progress)
-    resolved_async_client = async_client or create_openai_async_embedding_client(config, env)
+    if async_client is None:
+        return run_async_embedding_batches(
+            create_embedding_vectors_with_managed_client(
+                texts,
+                limits,
+                config,
+                env,
+                config.embeddings.max_concurrent_requests,
+                on_embedding_progress,
+            )
+        )
     return run_async_embedding_batches(
         create_embedding_vectors_async(
             texts,
             limits,
-            resolved_async_client,
+            async_client,
             config.embeddings.max_concurrent_requests,
             on_embedding_progress,
         )
@@ -258,6 +268,24 @@ async def create_embedding_vectors_async(
         *(create_batch(index, start, end) for index, (start, end) in enumerate(ranges))
     )
     return [vector for batch in batches if batch is not None for vector in batch]
+
+
+async def create_embedding_vectors_with_managed_client(
+    texts: list[str],
+    limits: EmbeddingBatchLimits,
+    config: DdserveConfig,
+    env: dict[str, str] | None,
+    max_concurrent_requests: int,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[list[float]]:
+    """Create vectors with an internally managed async OpenAI client."""
+    client = create_openai_async_embedding_client(config, env)
+    try:
+        return await create_embedding_vectors_async(
+            texts, limits, client, max_concurrent_requests, on_progress
+        )
+    finally:
+        await client.aclose()
 
 
 def run_async_embedding_batches(
