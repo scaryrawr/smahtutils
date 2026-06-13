@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import DdserveConfig
+from .config import SmahtiepantsConfig
 from .search import search_docs
 from .server_shared import list_docsets
 
 
 def session_start_context(
     cache_root: str | Path,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     prompt: str | None = None,
     env: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Implement session start context."""
     docsets = list_docsets(cache_root)
-    lines = ["ddserve documentation cache is available.", ""]
+    lines = ["smahtiepants documentation cache is available.", ""]
     if docsets:
         lines.append(
             "Installed docsets: "

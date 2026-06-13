@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import html
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from ddserve.config import DdserveConfig
-from ddserve.errors import DdserveError
-from ddserve.models import to_jsonable
+from smahtiepants.config import SmahtiepantsConfig
+from smahtiepants.errors import SmahtiepantsError
+from smahtiepants.models import to_jsonable
 
-from ddserve.embeddings.openai import EmbeddingClient, create_openai_embedding_client
-from ddserve.embeddings.annoy_index import AnnoyIndexManager
-from ddserve.embeddings.storage import SearchChunk, cosine_similarity, open_embedding_storage
+from smahtiepants.embeddings.openai import EmbeddingClient, create_openai_embedding_client
+from smahtiepants.embeddings.annoy_index import AnnoyIndexManager
+from smahtiepants.embeddings.storage import SearchChunk, cosine_similarity, open_embedding_storage
 
 from .filters import resolve_docset_filters
 from .terms import parse_keyword_terms
@@ -38,7 +38,7 @@ class SearchResult:
 def search_docs(
     cache_root: str | Path,
     query: str,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     slugs: list[str] | None = None,
     languages: list[str] | None = None,
     limit: int = 10,
@@ -47,7 +47,7 @@ def search_docs(
 ) -> list[SearchResult]:
     """Implement search docs."""
     if not query.strip():
-        raise DdserveError("Search query must not be empty")
+        raise SmahtiepantsError("Search query must not be empty")
     bounded_limit = max(1, min(limit, 50))
     resolved_slugs = resolve_docset_filters(cache_root, slugs, languages)
     if resolved_slugs is not None and not resolved_slugs:
@@ -55,6 +55,7 @@ def search_docs(
     storage = open_embedding_storage(cache_root)
     try:
         semantic: list[SearchResult] = []
+        terms = parse_keyword_terms(query)
         if config.openai is not None and config.embeddings.enabled:
             embedding_client = client or create_openai_embedding_client(config, env)
             query_vector = embedding_client.create_embeddings(query)[0]
@@ -82,17 +83,55 @@ def search_docs(
                 key=lambda item: item.score,
                 reverse=True,
             )[:bounded_limit]
-        if semantic:
-            return semantic
-        terms = parse_keyword_terms(query)
-        return [
-            chunk_to_result(chunk, max(0.0, 1.0 - index / max(1, bounded_limit)), "keyword")
+        keyword_limit = max(bounded_limit * 5, 50) if semantic else bounded_limit
+        keyword = [
+            chunk_to_result(chunk, max(0.0, 1.0 - index / max(1, keyword_limit)), "keyword")
             for index, chunk in enumerate(
-                storage.keyword_chunks(terms, resolved_slugs, bounded_limit)
+                storage.keyword_chunks(terms, resolved_slugs, keyword_limit)
             )
         ]
+        if semantic and keyword:
+            return merge_search_results(semantic, keyword, bounded_limit)
+        if semantic:
+            return semantic
+        return keyword[:bounded_limit]
     finally:
         storage.close()
+
+
+def merge_search_results(
+    semantic: list[SearchResult], keyword: list[SearchResult], limit: int
+) -> list[SearchResult]:
+    """Merge semantic and keyword results, preserving one result per chunk."""
+
+    merged: dict[tuple[str, str, int], SearchResult] = {}
+    for result in semantic:
+        merged[result_key(result)] = result
+    for result in keyword:
+        key = result_key(result)
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = result
+        else:
+            merged[key] = replace(
+                existing,
+                score=max(existing.score, result.score),
+                match_kind="hybrid",
+            )
+    return sorted(merged.values(), key=result_sort_key, reverse=True)[:limit]
+
+
+def result_sort_key(result: SearchResult) -> tuple[float, int]:
+    """Return ranking key that favors lexical matches on score ties."""
+
+    match_priority = {"semantic": 0, "keyword": 1, "hybrid": 2}.get(result.match_kind, 0)
+    return (result.score, match_priority)
+
+
+def result_key(result: SearchResult) -> tuple[str, str, int]:
+    """Return a stable chunk identity for result de-duplication."""
+
+    return (result.docset_slug, result.page_id, result.chunk_ordinal)
 
 
 def chunk_to_result(chunk: SearchChunk, score: float, match_kind: str) -> SearchResult:

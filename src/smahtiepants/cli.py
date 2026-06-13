@@ -12,7 +12,7 @@ from .embeddings.index import (
     refresh_docset_embeddings,
     status_for_embeddings,
 )
-from .errors import DdserveError
+from .errors import SmahtiepantsError
 from .format import format_bytes, format_table
 from .install import install_docsets, remove_docset, update_docsets
 from .models import to_jsonable
@@ -24,7 +24,7 @@ def main() -> None:
     """Implement main."""
     try:
         run_cli(sys.argv[1:])
-    except DdserveError as exc:
+    except SmahtiepantsError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
 
@@ -61,7 +61,7 @@ def run_cli(argv: list[str]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     """Implement build parser."""
-    parser = argparse.ArgumentParser(prog="ddserve")
+    parser = argparse.ArgumentParser(prog="smahtiepants")
     parser.add_argument("--config")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -240,12 +240,12 @@ def handle_embeddings(args: argparse.Namespace, cache_root: str) -> None:
             print(f"Indexed: {status.indexed_chunks} chunks, {status.embedded_chunks} embeddings")
         return
     if not args.slug:
-        raise DdserveError(f"embeddings {args.embeddings_command} requires a docset slug")
+        raise SmahtiepantsError(f"embeddings {args.embeddings_command} requires a docset slug")
     from .cache import read_docset_manifest
 
     manifest = read_docset_manifest(cache_root, args.slug)
     if manifest is None:
-        raise DdserveError(f'Docset "{args.slug}" is not installed.')
+        raise SmahtiepantsError(f'Docset "{args.slug}" is not installed.')
     if args.embeddings_command == "refresh":
         result = refresh_docset_embeddings(cache_root, manifest, loaded.config)
     else:

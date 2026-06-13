@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from ddserve.cache import ensure_embedding_db_path
+from smahtiepants.cache import ensure_embedding_db_path
 
 SQLITE_BUSY_TIMEOUT_SECONDS = 30
 

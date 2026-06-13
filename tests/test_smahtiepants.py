@@ -7,37 +7,38 @@ from pathlib import Path
 
 import pytest
 
-from ddserve.cache import read_cache_manifest, resolve_cache_root
-from ddserve.cli import run_cli
-from ddserve.config import (
-    DdserveConfig,
+from smahtiepants.cache import migrate_legacy_cache_root, read_cache_manifest, resolve_cache_root
+from smahtiepants.cli import run_cli
+from smahtiepants.config import (
+    SmahtiepantsConfig,
     EmbeddingsConfig,
     OpenAiConfig,
     load_config,
     redact_config,
 )
-from ddserve.devdocs import normalize_docsets
-from ddserve.embeddings.annoy_index import AnnoyIndexManager
-from ddserve.embeddings.chunks import (
+from smahtiepants.devdocs import normalize_docsets
+from smahtiepants.embeddings.annoy_index import AnnoyIndexManager
+from smahtiepants.embeddings.chunks import (
     ChunkedMarkdownPages,
     ChunkingStats,
     PreparedEmbeddingChunk,
     chunk_markdown_pages,
     split_markdown_into_chunks,
 )
-from ddserve.embeddings.index import (
+from smahtiepants.embeddings.index import (
     create_docset_embedding_vectors,
     create_embedding_vectors_async,
     rebuild_docset_embeddings,
 )
-from ddserve.embeddings.openai import EmbeddingBatchLimits, embedding_batch_ranges
-from ddserve.embeddings.storage import open_embedding_storage
-from ddserve.http import HttpClient
-from ddserve.install import install_docset, update_docsets
-from ddserve.search import search_docs
-from ddserve.search.filters import resolve_docset_filters
-from ddserve.server_shared import get_page_content, list_pages
-from ddserve.text import extract_html_section, normalize_link_href, render_markdown
+from smahtiepants.embeddings.openai import EmbeddingBatchLimits, embedding_batch_ranges
+from smahtiepants.embeddings.storage import open_embedding_storage
+from smahtiepants.http import HttpClient
+from smahtiepants.install import install_docset, update_docsets
+from smahtiepants.search import search_docs
+from smahtiepants.search.filters import resolve_docset_filters
+from smahtiepants.search.terms import parse_keyword_terms
+from smahtiepants.server_shared import get_page_content, list_pages
+from smahtiepants.text import extract_html_section, normalize_link_href, render_markdown
 
 
 class FakeHttp(HttpClient):
@@ -61,7 +62,7 @@ class FakeHttp(HttpClient):
 
     def download_file(self, url: str, destination: str | Path):
         """Implement download file."""
-        from ddserve.models import DownloadedFile
+        from smahtiepants.models import DownloadedFile
 
         target = Path(destination)
         if url.endswith("/index.json"):
@@ -89,7 +90,7 @@ class MultiFakeHttp(HttpClient):
 
     def download_file(self, url: str, destination: str | Path):
         """Implement download file."""
-        from ddserve.models import DownloadedFile
+        from smahtiepants.models import DownloadedFile
 
         target = Path(destination)
         slug = url.rstrip("/").split("/")[-2]
@@ -106,27 +107,27 @@ class MultiFakeHttp(HttpClient):
         )
 
 
-def test_ddserve_config_parses_and_redacts_secrets() -> None:
-    """Validate ddserve config parses shared ddserve settings and redacts secrets."""
+def test_smahtiepants_config_parses_and_redacts_secrets() -> None:
+    """Validate smahtiepants config parses shared smahtiepants settings and redacts secrets."""
     from wickedsmaht_config import (
         Config,
-        DdserveAuthSettings,
-        DdserveCorsSettings,
-        DdserveServeSettings,
-        DdserveSettings,
+        SmahtiepantsAuthSettings,
+        SmahtiepantsCorsSettings,
+        SmahtiepantsServeSettings,
+        SmahtiepantsSettings,
     )
 
-    from ddserve.config import from_shared_config
+    from smahtiepants.config import from_shared_config
 
     config = from_shared_config(
         Config(
             base_url="http://127.0.0.1:11434/v1",
             text_embedding_model="embed",
-            ddserve=DdserveSettings(
+            smahtiepants=SmahtiepantsSettings(
                 api_key="secret",
-                serve=DdserveServeSettings(
-                    auth=DdserveAuthSettings(token="token"),
-                    cors=DdserveCorsSettings(origins=["http://localhost:3000"]),
+                serve=SmahtiepantsServeSettings(
+                    auth=SmahtiepantsAuthSettings(token="token"),
+                    cors=SmahtiepantsCorsSettings(origins=["http://localhost:3000"]),
                 ),
             ),
         )
@@ -140,8 +141,29 @@ def test_ddserve_config_parses_and_redacts_secrets() -> None:
     assert redacted["serve"]["auth"]["token"] == "[redacted]"
 
 
-def test_ddserve_config_loads_wickedsmaht_text_embedding(tmp_path: Path) -> None:
-    """Validate ddserve config loads shared text embedding settings."""
+def test_smahtiepants_config_accepts_legacy_ddserve_settings() -> None:
+    """Validate legacy shared ddserve settings still feed smahtiepants config."""
+    from wickedsmaht_config import Config, DdserveEmbeddingSettings, DdserveSettings
+
+    from smahtiepants.config import from_shared_config
+
+    config = from_shared_config(
+        Config(
+            base_url="http://127.0.0.1:11434/v1",
+            text_embedding_model="embed",
+            ddserve=DdserveSettings(
+                api_key_env="DOCS_API_KEY",
+                embeddings=DdserveEmbeddingSettings(batch_size=7),
+            ),
+        )
+    )
+
+    assert config.openai and config.openai.api_key_env == "DOCS_API_KEY"
+    assert config.embeddings.batch_size == 7
+
+
+def test_smahtiepants_config_loads_wickedsmaht_text_embedding(tmp_path: Path) -> None:
+    """Validate smahtiepants config loads shared text embedding settings."""
     home = tmp_path / "home"
     config_dir = home / ".wickedsmaht"
     config_dir.mkdir(parents=True)
@@ -165,8 +187,30 @@ def test_ddserve_config_loads_wickedsmaht_text_embedding(tmp_path: Path) -> None
     assert loaded.config.openai.embedding_model == "text-embed"
 
 
-def test_ddserve_config_does_not_use_coding_embedding_model(tmp_path: Path) -> None:
-    """Validate ddserve config does not use coding embedding settings."""
+def test_smahtiepants_config_migrates_legacy_ddserve_key(tmp_path: Path) -> None:
+    """Validate loading config rewrites legacy ddserve settings to smahtiepants."""
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "base-url": "http://127.0.0.1:14892/v1",
+                "text-embedding-model": "text-embed",
+                "ddserve": {"api-key-env": "DOCS_API_KEY"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_config(str(path))
+    migrated = json.loads(path.read_text(encoding="utf-8"))
+
+    assert loaded.config.openai and loaded.config.openai.api_key_env == "DOCS_API_KEY"
+    assert "smahtiepants" in migrated
+    assert "ddserve" not in migrated
+
+
+def test_smahtiepants_config_does_not_use_coding_embedding_model(tmp_path: Path) -> None:
+    """Validate smahtiepants config does not use coding embedding settings."""
     home = tmp_path / "home"
     config_dir = home / ".wickedsmaht"
     config_dir.mkdir(parents=True)
@@ -186,13 +230,50 @@ def test_ddserve_config_does_not_use_coding_embedding_model(tmp_path: Path) -> N
     assert loaded.config.openai is None
 
 
-def test_ddserve_cache_root_prefers_env(tmp_path: Path) -> None:
-    """Validate ddserve cache root prefers env."""
-    assert resolve_cache_root({"DDSERVE_CACHE_DIR": str(tmp_path / "cache")}) == tmp_path / "cache"
+def test_smahtiepants_cache_root_prefers_env(tmp_path: Path) -> None:
+    """Validate smahtiepants cache root prefers env."""
+    assert (
+        resolve_cache_root({"SMAHTIEPANTS_CACHE_DIR": str(tmp_path / "cache")})
+        == tmp_path / "cache"
+    )
+    assert (
+        resolve_cache_root({"DDSERVE_CACHE_DIR": str(tmp_path / "legacy")}) == tmp_path / "legacy"
+    )
     assert (
         resolve_cache_root({"XDG_CACHE_HOME": str(tmp_path / "xdg")})
-        == tmp_path / "xdg" / "ddserve"
+        == tmp_path / "xdg" / "smahtiepants"
     )
+
+
+def test_smahtiepants_cache_root_migrates_legacy_default_cache(tmp_path: Path) -> None:
+    """Validate default ddserve cache is moved to the smahtiepants cache path."""
+    legacy = tmp_path / ".cache" / "ddserve"
+    legacy.mkdir(parents=True)
+    (legacy / "manifest.json").write_text("{}", encoding="utf-8")
+
+    migrated = resolve_cache_root({"HOME": str(tmp_path)})
+
+    assert migrated == tmp_path / ".cache" / "smahtiepants"
+    assert (migrated / "manifest.json").is_file()
+    assert not legacy.exists()
+
+
+def test_legacy_cache_migration_tolerates_concurrent_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate cache migration succeeds if another process already moved the legacy path."""
+    root = tmp_path / ".cache" / "smahtiepants"
+    legacy = tmp_path / ".cache" / "ddserve"
+    legacy.mkdir(parents=True)
+
+    def concurrent_replace(_self: Path, target: Path) -> None:
+        legacy.rmdir()
+        target.mkdir()
+        raise FileNotFoundError(str(legacy))
+
+    monkeypatch.setattr(Path, "replace", concurrent_replace)
+
+    assert migrate_legacy_cache_root(root, legacy) == root
 
 
 def test_devdocs_normalizes_docsets() -> None:
@@ -252,9 +333,9 @@ def test_markdown_chunking_bounds_chunks_per_page(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    from ddserve.cache import read_docset_manifest
+    from smahtiepants.cache import read_docset_manifest
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -347,7 +428,7 @@ def test_created_async_embedding_client_closes_before_event_loop_exits(
         return ManagedAsyncClient()
 
     monkeypatch.setattr(
-        "ddserve.embeddings.index.create_openai_async_embedding_client", create_client
+        "smahtiepants.embeddings.index.create_openai_async_embedding_client", create_client
     )
 
     chunked = ChunkedMarkdownPages(
@@ -377,7 +458,7 @@ def test_created_async_embedding_client_closes_before_event_loop_exits(
 
     vectors = create_docset_embedding_vectors(
         chunked,
-        DdserveConfig(
+        SmahtiepantsConfig(
             embeddings=EmbeddingsConfig(enabled=True),
             openai=OpenAiConfig(embedding_model="embed"),
         ),
@@ -398,7 +479,7 @@ def test_install_docset_writes_manifests_and_pages(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
 
     manifest = read_cache_manifest(tmp_path)
@@ -418,9 +499,9 @@ def test_docs_available_marks_installed_docsets(
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    monkeypatch.setenv("DDSERVE_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("SMAHTIEPANTS_CACHE_DIR", str(tmp_path))
 
     run_cli(["docs", "available", "--offline"])
 
@@ -434,7 +515,7 @@ def test_docset_filters_use_stored_aliases(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
 
     assert resolve_docset_filters(tmp_path, languages=["headers"]) == {"http"}
@@ -448,9 +529,9 @@ def test_docs_update_prints_progress(
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    monkeypatch.setenv("DDSERVE_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("SMAHTIEPANTS_CACHE_DIR", str(tmp_path))
 
     run_cli(["docs", "update", "--offline"])
 
@@ -465,10 +546,10 @@ def test_keyword_search_falls_back_to_indexed_chunks(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    from ddserve.cache import read_docset_manifest
-    from ddserve.embeddings.chunks import chunk_markdown_pages
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -482,7 +563,7 @@ def test_keyword_search_falls_back_to_indexed_chunks(tmp_path: Path) -> None:
     results = search_docs(
         tmp_path,
         "request headers",
-        DdserveConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None),
+        SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None),
     )
 
     assert results[0].docset_slug == "http"
@@ -495,10 +576,10 @@ def test_keyword_search_sanitizes_fts_query_terms(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    from ddserve.cache import read_docset_manifest
-    from ddserve.embeddings.chunks import chunk_markdown_pages
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -512,10 +593,16 @@ def test_keyword_search_sanitizes_fts_query_terms(tmp_path: Path) -> None:
     results = search_docs(
         tmp_path,
         'request+headers "metadata"',
-        DdserveConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None),
+        SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None),
     )
 
     assert results[0].docset_slug == "http"
+
+
+def test_keyword_terms_ignore_common_stopwords() -> None:
+    """Validate keyword terms skip trivial query words."""
+
+    assert parse_keyword_terms("sorting a list") == ["sorting", "list"]
 
 
 def test_search_with_unknown_slug_returns_no_results(tmp_path: Path) -> None:
@@ -524,10 +611,10 @@ def test_search_with_unknown_slug_returns_no_results(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    from ddserve.cache import read_docset_manifest
-    from ddserve.embeddings.chunks import chunk_markdown_pages
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -541,7 +628,7 @@ def test_search_with_unknown_slug_returns_no_results(tmp_path: Path) -> None:
     results = search_docs(
         tmp_path,
         "request headers",
-        DdserveConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None),
+        SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None),
         slugs=["missing"],
     )
 
@@ -554,7 +641,7 @@ def test_server_shared_lists_pages_and_line_ranges(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
 
     pages = list_pages(tmp_path, "http", query="headers")
@@ -570,10 +657,10 @@ def test_semantic_search_uses_configured_embedding_client(tmp_path: Path) -> Non
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    from ddserve.cache import read_docset_manifest
-    from ddserve.embeddings.chunks import chunk_markdown_pages
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -594,14 +681,14 @@ def test_semantic_search_uses_configured_embedding_client(tmp_path: Path) -> Non
     results = search_docs(
         tmp_path,
         "headers",
-        DdserveConfig(
+        SmahtiepantsConfig(
             embeddings=EmbeddingsConfig(enabled=True),
             openai=OpenAiConfig(embedding_model="embed"),
         ),
         client=FakeEmbeddingClient(),
     )
 
-    assert results[0].match_kind == "semantic"
+    assert results[0].match_kind == "hybrid"
     assert results[0].score == pytest.approx(1.0)
     storage = open_embedding_storage(tmp_path)
     try:
@@ -610,16 +697,75 @@ def test_semantic_search_uses_configured_embedding_client(tmp_path: Path) -> Non
         storage.close()
 
 
-def test_ddserve_annoy_index_rebuilds_when_embeddings_change(tmp_path: Path) -> None:
-    """Validate ddserve annoy index rebuilds when embeddings change."""
+def test_search_merges_keyword_hits_with_semantic_results(tmp_path: Path) -> None:
+    """Validate keyword hits can outrank weak semantic matches."""
+
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=MultiFakeHttp(),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+    install_docset(
+        "css",
+        str(tmp_path),
+        http=MultiFakeHttp(),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
+
+    http_docset = read_docset_manifest(tmp_path, "http")
+    css_docset = read_docset_manifest(tmp_path, "css")
+    assert http_docset is not None
+    assert css_docset is not None
+
+    http_page = tmp_path / "docs" / "http" / http_docset.pages[0].file
+    css_page = tmp_path / "docs" / "css" / css_docset.pages[0].file
+    http_page.write_text("# Arrays\n\nShell arrays use indexed containers.", encoding="utf-8")
+    css_page.write_text("# Sorting\n\nSorting a list is covered here.", encoding="utf-8")
+
+    http_chunks = chunk_markdown_pages(http_docset, tmp_path)
+    css_chunks = chunk_markdown_pages(css_docset, tmp_path)
+    storage = open_embedding_storage(tmp_path)
+    try:
+        storage.replace_docset_chunks(http_chunks.docset, http_chunks.chunks, [[1.0, 0.0]], "embed")
+        storage.replace_docset_chunks(css_chunks.docset, css_chunks.chunks, [[0.0, 1.0]], "embed")
+    finally:
+        storage.close()
+
+    class FakeEmbeddingClient:
+        """Represent FakeEmbeddingClient."""
+
+        def create_embeddings(self, _input):
+            """Implement create embeddings."""
+            return [[1.0, 0.0]]
+
+    results = search_docs(
+        tmp_path,
+        "sorting a list",
+        SmahtiepantsConfig(
+            embeddings=EmbeddingsConfig(enabled=True),
+            openai=OpenAiConfig(embedding_model="embed"),
+        ),
+        client=FakeEmbeddingClient(),
+    )
+
+    assert results[0].docset_slug == "css"
+    assert results[0].match_kind == "hybrid"
+    assert any(result.docset_slug == "http" for result in results)
+
+
+def test_smahtiepants_annoy_index_rebuilds_when_embeddings_change(tmp_path: Path) -> None:
+    """Validate smahtiepants annoy index rebuilds when embeddings change."""
     install_docset(
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    from ddserve.cache import read_docset_manifest
-    from ddserve.embeddings.chunks import chunk_markdown_pages
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -647,7 +793,7 @@ def test_ddserve_annoy_index_rebuilds_when_embeddings_change(tmp_path: Path) -> 
 
 def test_update_skips_current_embeddings_and_preserves_annoy(tmp_path: Path) -> None:
     """Validate update skips current embeddings and preserves annoy."""
-    config = DdserveConfig(
+    config = SmahtiepantsConfig(
         embeddings=EmbeddingsConfig(enabled=True),
         openai=OpenAiConfig(embedding_model="embed"),
     )
@@ -710,7 +856,7 @@ def test_update_skips_current_embeddings_and_preserves_annoy(tmp_path: Path) -> 
 
 def test_update_builds_missing_annoy_for_current_embeddings(tmp_path: Path) -> None:
     """Validate update builds missing annoy for current embeddings."""
-    config = DdserveConfig(
+    config = SmahtiepantsConfig(
         embeddings=EmbeddingsConfig(enabled=True),
         openai=OpenAiConfig(embedding_model="embed"),
     )
@@ -770,7 +916,7 @@ def test_update_builds_missing_annoy_for_current_embeddings(tmp_path: Path) -> N
 
 def test_update_migrates_legacy_embeddings_without_content_hash(tmp_path: Path) -> None:
     """Validate update migrates legacy embeddings without content hash."""
-    config = DdserveConfig(
+    config = SmahtiepantsConfig(
         embeddings=EmbeddingsConfig(enabled=True),
         openai=OpenAiConfig(embedding_model="embed"),
     )
@@ -839,7 +985,7 @@ def test_update_migrates_legacy_embeddings_without_content_hash(tmp_path: Path) 
 
 def test_rebuild_embeddings_forces_current_vectors(tmp_path: Path) -> None:
     """Validate rebuild embeddings forces current vectors."""
-    config = DdserveConfig(
+    config = SmahtiepantsConfig(
         embeddings=EmbeddingsConfig(enabled=True),
         openai=OpenAiConfig(embedding_model="embed"),
     )
@@ -866,7 +1012,7 @@ def test_rebuild_embeddings_forces_current_vectors(tmp_path: Path) -> None:
         config=config,
         embedding_client=client,
     )
-    from ddserve.cache import read_docset_manifest
+    from smahtiepants.cache import read_docset_manifest
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -878,7 +1024,7 @@ def test_rebuild_embeddings_forces_current_vectors(tmp_path: Path) -> None:
 
 
 def test_embedding_storage_uses_wal_and_busy_timeout(tmp_path: Path) -> None:
-    """Validate ddserve SQLite storage is configured for concurrent readers."""
+    """Validate smahtiepants SQLite storage is configured for concurrent readers."""
     storage = open_embedding_storage(tmp_path)
     try:
         journal_mode = storage.conn.execute("PRAGMA journal_mode").fetchone()[0]
@@ -896,10 +1042,10 @@ def test_embedding_storage_rebuilds_chunk_fts(tmp_path: Path) -> None:
         "http",
         str(tmp_path),
         http=FakeHttp(tmp_path),
-        config=DdserveConfig(embeddings=EmbeddingsConfig(enabled=False)),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
     )
-    from ddserve.cache import read_docset_manifest
-    from ddserve.embeddings.chunks import chunk_markdown_pages
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
 
     docset = read_docset_manifest(tmp_path, "http")
     assert docset is not None
@@ -970,7 +1116,7 @@ def test_multi_docset_update_defers_annoy_rebuild(
 ) -> None:
     """Validate docs update rebuilds Annoy once for a multi-docset run."""
     http = MultiFakeHttp()
-    disabled = DdserveConfig(embeddings=EmbeddingsConfig(enabled=False))
+    disabled = SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False))
     install_docset("http", str(tmp_path), http=http, config=disabled)
     install_docset("css", str(tmp_path), http=http, config=disabled)
 
@@ -996,13 +1142,13 @@ def test_multi_docset_update_defers_annoy_rebuild(
             type(self).calls += 1
             return True
 
-    monkeypatch.setattr("ddserve.install.AnnoyIndexManager", CountingAnnoyIndexManager)
+    monkeypatch.setattr("smahtiepants.install.AnnoyIndexManager", CountingAnnoyIndexManager)
 
     results = update_docsets(
         None,
         str(tmp_path),
         offline=True,
-        config=DdserveConfig(
+        config=SmahtiepantsConfig(
             embeddings=EmbeddingsConfig(enabled=True),
             openai=OpenAiConfig(embedding_model="embed"),
         ),

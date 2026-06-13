@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .cache import atomic_write_json, ensure_cache_root, read_json_file
-from .errors import DdserveError, get_error_message
+from .errors import SmahtiepantsError, get_error_message
 from .http import FetchHttpClient, HttpClient
 from .models import DEV_DOCS_SOURCE, AvailableDocsetsResult, DocsetSummary
 
@@ -40,7 +40,7 @@ def get_available_docsets(
     cached = read_json_file(paths.devdocs_source_index)
     if not isinstance(cached, dict) or not isinstance(cached.get("docsets"), list):
         mode = "Offline mode requested" if offline else "DevDocs index refresh failed"
-        raise DdserveError(
+        raise SmahtiepantsError(
             f"{mode}, and no cached DevDocs index exists at {paths.devdocs_source_index}"
         )
     return AvailableDocsetsResult(
@@ -69,7 +69,7 @@ def docset_db_url(slug: str) -> str:
 def normalize_docsets(raw_docsets: object) -> list[DocsetSummary]:
     """Normalize docsets."""
     if not isinstance(raw_docsets, list):
-        raise DdserveError("DevDocs index did not contain a docset array")
+        raise SmahtiepantsError("DevDocs index did not contain a docset array")
     docsets: list[DocsetSummary] = []
     for raw in raw_docsets:
         if not isinstance(raw, dict):

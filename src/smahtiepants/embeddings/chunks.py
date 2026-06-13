@@ -7,10 +7,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from ddserve.cache import assert_safe_path_segment, cache_paths
-from ddserve.errors import DdserveError
-from ddserve.models import DocsetManifest, PageManifestEntry
-from ddserve.text import remove_unpaired_surrogates
+from smahtiepants.cache import assert_safe_path_segment, cache_paths
+from smahtiepants.errors import SmahtiepantsError
+from smahtiepants.models import DocsetManifest, PageManifestEntry
+from smahtiepants.text import remove_unpaired_surrogates
 
 DEFAULT_CHUNK_MAX_CHARS = 2400
 DEFAULT_CHUNK_MIN_CHARS = 200
@@ -64,7 +64,9 @@ def chunk_markdown_pages(
     slug = slug or manifest.slug
     assert_safe_path_segment(slug, "docset slug")
     if slug != manifest.slug:
-        raise DdserveError(f'Manifest slug "{manifest.slug}" does not match docset slug "{slug}"')
+        raise SmahtiepantsError(
+            f'Manifest slug "{manifest.slug}" does not match docset slug "{slug}"'
+        )
     max_chars, overlap, min_chars, page_chunk_limit = normalize_chunk_options(
         max_chunk_chars, overlap_chars, min_chunk_chars, max_chunks_per_page
     )
@@ -119,11 +121,11 @@ def read_installed_page_markdown(cache_root: str | Path, slug: str, page: PageMa
     try:
         return page_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise DdserveError(
+        raise SmahtiepantsError(
             f'Missing Markdown page file for docset "{slug}" page "{page.id}": {page.file}'
         ) from exc
     except OSError as exc:
-        raise DdserveError(f"Failed to read Markdown page file {page.file}: {exc}") from exc
+        raise SmahtiepantsError(f"Failed to read Markdown page file {page.file}: {exc}") from exc
 
 
 def split_markdown_into_chunks(
@@ -226,7 +228,7 @@ def resolve_installed_page_path(cache_root: str | Path, slug: str, page_file: st
     try:
         page_path.relative_to(docset_root)
     except ValueError as exc:
-        raise DdserveError(
+        raise SmahtiepantsError(
             f'Invalid Markdown page file path for docset "{slug}": {page_file}'
         ) from exc
     return page_path
@@ -284,19 +286,19 @@ def normalize_chunk_options(
         DEFAULT_MAX_CHUNKS_PER_PAGE if max_chunks_per_page is None else max_chunks_per_page
     )
     if not isinstance(max_chars, int) or max_chars <= 0:
-        raise DdserveError("Invalid max chunk size: expected a positive integer")
+        raise SmahtiepantsError("Invalid max chunk size: expected a positive integer")
     if not isinstance(min_chars, int) or min_chars <= 0:
-        raise DdserveError("Invalid min chunk size: expected a positive integer")
+        raise SmahtiepantsError("Invalid min chunk size: expected a positive integer")
     if not isinstance(overlap, int) or overlap < 0:
-        raise DdserveError("Invalid chunk overlap: expected a non-negative integer")
+        raise SmahtiepantsError("Invalid chunk overlap: expected a non-negative integer")
     if not isinstance(page_chunk_limit, int) or page_chunk_limit <= 0:
-        raise DdserveError("Invalid max chunks per page: expected a positive integer")
+        raise SmahtiepantsError("Invalid max chunks per page: expected a positive integer")
     if min_chunk_chars is None and min_chars > max_chars:
         min_chars = max_chars
     if min_chars > max_chars:
-        raise DdserveError("Invalid min chunk size: must not exceed max chunk size")
+        raise SmahtiepantsError("Invalid min chunk size: must not exceed max chunk size")
     if overlap >= max_chars:
-        raise DdserveError("Invalid chunk overlap: must be smaller than max chunk size")
+        raise SmahtiepantsError("Invalid chunk overlap: must be smaller than max chunk size")
     return max_chars, overlap, min_chars, page_chunk_limit
 
 

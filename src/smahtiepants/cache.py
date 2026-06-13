@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .errors import DdserveError
+from .errors import SmahtiepantsError
 from .models import (
     CACHE_SCHEMA_VERSION,
     CacheManifest,
@@ -18,7 +18,8 @@ from .models import (
     to_jsonable,
 )
 
-DEFAULT_CACHE_ENV = "DDSERVE_CACHE_DIR"
+DEFAULT_CACHE_ENV = "SMAHTIEPANTS_CACHE_DIR"
+LEGACY_CACHE_ENV = "DDSERVE_CACHE_DIR"
 SAFE_PATH_SEGMENT_RE = re.compile(r"^[a-z0-9][a-z0-9._+~-]*$", re.IGNORECASE)
 
 
@@ -43,10 +44,40 @@ def resolve_cache_root(env: dict[str, str] | None = None) -> Path:
     override = env.get(DEFAULT_CACHE_ENV)
     if override and override.strip():
         return Path(override).expanduser().resolve()
+    legacy_override = env.get(LEGACY_CACHE_ENV)
+    if legacy_override and legacy_override.strip():
+        return Path(legacy_override).expanduser().resolve()
     xdg_cache_home = env.get("XDG_CACHE_HOME")
     if xdg_cache_home and xdg_cache_home.strip():
-        return (Path(xdg_cache_home).expanduser() / "ddserve").resolve()
-    return Path.home() / ".cache" / "ddserve"
+        cache_home = Path(xdg_cache_home).expanduser()
+    else:
+        home = env.get("HOME")
+        cache_home = Path(home).expanduser() / ".cache" if home else Path.home() / ".cache"
+    return migrate_legacy_cache_root(
+        (cache_home / "smahtiepants").resolve(),
+        (cache_home / "ddserve").resolve(),
+    )
+
+
+def migrate_legacy_cache_root(root: Path, legacy_root: Path) -> Path:
+    """Move a legacy default ddserve cache to the smahtiepants cache path."""
+
+    if root.exists() or not legacy_root.exists():
+        return root
+    if not legacy_root.is_dir():
+        raise SmahtiepantsError(f"Legacy cache path is not a directory: {legacy_root}")
+    root.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        legacy_root.replace(root)
+    except FileNotFoundError:
+        return root
+    except FileExistsError:
+        return root
+    except OSError as exc:
+        raise SmahtiepantsError(
+            f"Failed to migrate legacy cache directory from {legacy_root} to {root}: {exc}"
+        ) from exc
+    return root
 
 
 def cache_paths(root: str | Path | None = None) -> CachePaths:
@@ -98,7 +129,7 @@ def read_cache_manifest(root: str | Path | None = None) -> CacheManifest:
         return create_empty_cache_manifest()
     manifest = from_cache_manifest(value)
     if manifest.schema_version != CACHE_SCHEMA_VERSION:
-        raise DdserveError(f"Unsupported cache manifest at {paths.manifest}")
+        raise SmahtiepantsError(f"Unsupported cache manifest at {paths.manifest}")
     return manifest
 
 
@@ -121,7 +152,7 @@ def read_json_file(path: str | Path) -> Any | None:
     except FileNotFoundError:
         return None
     except json.JSONDecodeError as exc:
-        raise DdserveError(f"Invalid JSON in {path}: {exc}") from exc
+        raise SmahtiepantsError(f"Invalid JSON in {path}: {exc}") from exc
 
 
 def atomic_write_json(path: str | Path, value: object) -> None:
@@ -143,7 +174,7 @@ def path_exists(path: str | Path) -> bool:
 def assert_safe_path_segment(value: str, label: str) -> None:
     """Assert safe path segment."""
     if not SAFE_PATH_SEGMENT_RE.match(value):
-        raise DdserveError(f"Invalid {label}: {value}")
+        raise SmahtiepantsError(f"Invalid {label}: {value}")
 
 
 def replace_directory(stage_dir: str | Path, final_dir: str | Path) -> None:
@@ -165,7 +196,9 @@ def replace_directory(stage_dir: str | Path, final_dir: str | Path) -> None:
             shutil.rmtree(final, ignore_errors=True)
         if backup.exists():
             backup.replace(final)
-        raise DdserveError(f"Failed to replace cached docset directory {final}: {exc}") from exc
+        raise SmahtiepantsError(
+            f"Failed to replace cached docset directory {final}: {exc}"
+        ) from exc
 
 
 class DocsetLock:
@@ -197,7 +230,9 @@ def acquire_docset_lock(root: str | Path, slug: str) -> DocsetLock:
         lock_dir.mkdir()
     except FileExistsError as exc:
         if not is_stale_lock(lock_dir):
-            raise DdserveError(f'Docset "{slug}" is already being installed or updated') from exc
+            raise SmahtiepantsError(
+                f'Docset "{slug}" is already being installed or updated'
+            ) from exc
         shutil.rmtree(lock_dir, ignore_errors=True)
         lock_dir.mkdir()
     atomic_write_json(

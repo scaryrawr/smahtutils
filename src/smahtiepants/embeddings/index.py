@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ddserve.cache import read_cache_manifest, read_docset_manifest
-from ddserve.config import DdserveConfig
-from ddserve.errors import DdserveError
-from ddserve.models import DocsetManifest
+from smahtiepants.cache import read_cache_manifest, read_docset_manifest
+from smahtiepants.config import SmahtiepantsConfig
+from smahtiepants.errors import SmahtiepantsError
+from smahtiepants.models import DocsetManifest
 
 from .annoy_index import AnnoyIndexManager
 from .chunks import ChunkedMarkdownPages, chunk_markdown_pages
@@ -42,7 +42,7 @@ class EmbeddingStatus:
 def refresh_docset_embeddings(
     cache_root: str | Path,
     manifest: DocsetManifest,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     env: dict[str, str] | None = None,
     client: EmbeddingClient | None = None,
     force: bool = False,
@@ -55,7 +55,7 @@ def refresh_docset_embeddings(
     if not config.embeddings.enabled:
         return {"chunks": 0, "embedded": 0}
     if config.openai is None:
-        raise DdserveError("OpenAI embeddings are not configured")
+        raise SmahtiepantsError("OpenAI embeddings are not configured")
     chunked = chunk_markdown_pages(
         manifest,
         cache_root,
@@ -109,7 +109,7 @@ def refresh_docset_embeddings(
 def rebuild_docset_embeddings(
     cache_root: str | Path,
     manifest: DocsetManifest,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     env: dict[str, str] | None = None,
     client: EmbeddingClient | None = None,
     *,
@@ -119,7 +119,7 @@ def rebuild_docset_embeddings(
 ) -> dict[str, int]:
     """Implement rebuild docset embeddings."""
     if not config.embeddings.enabled or config.openai is None:
-        raise DdserveError("OpenAI embeddings are not configured")
+        raise SmahtiepantsError("OpenAI embeddings are not configured")
     return refresh_docset_embeddings(
         cache_root,
         manifest,
@@ -135,7 +135,7 @@ def rebuild_docset_embeddings(
 
 def status_for_embeddings(
     cache_root: str | Path,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     slug: str | None = None,
 ) -> EmbeddingStatus:
     """Implement status for embeddings."""
@@ -164,20 +164,20 @@ def status_for_embeddings(
 def refresh_installed_slug(
     cache_root: str | Path,
     slug: str,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     env: dict[str, str] | None = None,
     client: EmbeddingClient | None = None,
 ) -> dict[str, int]:
     """Implement refresh installed slug."""
     manifest = read_docset_manifest(cache_root, slug)
     if manifest is None:
-        raise DdserveError(f'Docset "{slug}" is not installed.')
+        raise SmahtiepantsError(f'Docset "{slug}" is not installed.')
     return refresh_docset_embeddings(cache_root, manifest, config, env, client)
 
 
 def create_docset_embedding_vectors(
     chunked: ChunkedMarkdownPages,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     env: dict[str, str] | None,
     client: EmbeddingClient | None,
     async_client: AsyncEmbeddingClient | None,
@@ -229,7 +229,7 @@ def create_embedding_vectors_sync(
         if on_progress is not None:
             on_progress(completed, len(ranges))
     if len(vectors) != len(texts):
-        raise DdserveError(
+        raise SmahtiepantsError(
             f"OpenAI embedding response count mismatch: expected {len(texts)}, received {len(vectors)}"
         )
     return vectors
@@ -255,7 +255,7 @@ async def create_embedding_vectors_async(
         async with semaphore:
             vectors = await client.create_embeddings(texts[start:end])
         if len(vectors) != end - start:
-            raise DdserveError(
+            raise SmahtiepantsError(
                 "OpenAI embedding response count mismatch: "
                 f"expected {end - start}, received {len(vectors)}"
             )
@@ -273,7 +273,7 @@ async def create_embedding_vectors_async(
 async def create_embedding_vectors_with_managed_client(
     texts: list[str],
     limits: EmbeddingBatchLimits,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     env: dict[str, str] | None,
     max_concurrent_requests: int,
     on_progress: Callable[[int, int], None] | None = None,
@@ -291,13 +291,13 @@ async def create_embedding_vectors_with_managed_client(
 def run_async_embedding_batches(
     coroutine: Coroutine[Any, Any, list[list[float]]],
 ) -> list[list[float]]:
-    """Run async embedding work from the synchronous ddserve CLI path."""
+    """Run async embedding work from the synchronous smahtiepants CLI path."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coroutine)
     coroutine.close()
-    raise DdserveError("ddserve embedding refresh cannot run inside an active event loop")
+    raise SmahtiepantsError("smahtiepants embedding refresh cannot run inside an active event loop")
 
 
 def chunking_result_counts(chunked: ChunkedMarkdownPages) -> dict[str, int]:

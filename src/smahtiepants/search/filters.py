@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ddserve.cache import cache_paths, read_cache_manifest, read_docset_manifest
+from smahtiepants.cache import cache_paths, read_cache_manifest, read_docset_manifest
 
 
 def split_filter_values(values: list[str] | None) -> list[str]:

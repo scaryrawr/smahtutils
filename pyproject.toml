@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-ddserve = "ddserve.cli:main"
+smahtiepants = "smahtiepants.cli:main"
 smahties = "smahties.cli:main"
 wickedpaste = "wickedpaste.cli:main"
 
