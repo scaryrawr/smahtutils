@@ -4,7 +4,8 @@ import argparse
 import json
 import sys
 
-from .cache import read_cache_manifest, resolve_cache_root
+from .aliases import resolve_installed_docset_slug
+from .cache import read_cache_manifest, read_docset_manifest, resolve_cache_root
 from .config import load_config, redact_config
 from .devdocs import get_available_docsets
 from .embeddings.index import (
@@ -162,6 +163,7 @@ def handle_docs(args: argparse.Namespace, cache_root: str) -> None:
             installed_slugs = set(read_cache_manifest(cache_root).docs)
             columns = [
                 ("Slug", lambda row: row.slug),
+                ("Aliases", lambda row: ", ".join(row.aliases)),
                 ("Name", lambda row: row.name),
                 ("Type", lambda row: row.type),
                 ("Size", lambda row: format_bytes(row.db_size)),
@@ -241,9 +243,8 @@ def handle_embeddings(args: argparse.Namespace, cache_root: str) -> None:
         return
     if not args.slug:
         raise SmahtiepantsError(f"embeddings {args.embeddings_command} requires a docset slug")
-    from .cache import read_docset_manifest
-
-    manifest = read_docset_manifest(cache_root, args.slug)
+    canonical_slug = resolve_installed_docset_slug(cache_root, args.slug) or args.slug
+    manifest = read_docset_manifest(cache_root, canonical_slug)
     if manifest is None:
         raise SmahtiepantsError(f'Docset "{args.slug}" is not installed.')
     if args.embeddings_command == "refresh":

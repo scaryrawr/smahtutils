@@ -16,7 +16,7 @@ from smahtiepants.config import (
     load_config,
     redact_config,
 )
-from smahtiepants.devdocs import normalize_docsets
+from smahtiepants.devdocs import find_docset, normalize_docsets
 from smahtiepants.embeddings.annoy_index import AnnoyIndexManager
 from smahtiepants.embeddings.chunks import (
     ChunkedMarkdownPages,
@@ -33,7 +33,7 @@ from smahtiepants.embeddings.index import (
 from smahtiepants.embeddings.openai import EmbeddingBatchLimits, embedding_batch_ranges
 from smahtiepants.embeddings.storage import open_embedding_storage
 from smahtiepants.http import HttpClient
-from smahtiepants.install import install_docset, update_docsets
+from smahtiepants.install import install_docset, remove_docset, update_docsets
 from smahtiepants.search import search_docs
 from smahtiepants.search.filters import resolve_docset_filters
 from smahtiepants.search.terms import parse_keyword_terms
@@ -98,6 +98,75 @@ class MultiFakeHttp(HttpClient):
             payload = {"entries": [{"name": slug.upper(), "path": slug, "type": "Guide"}]}
         else:
             payload = {slug: f"<h1>{slug.upper()}</h1><p>{slug} request metadata.</p>"}
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        data = target.read_bytes()
+        import hashlib
+
+        return DownloadedFile(
+            path=str(target), bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+        )
+
+
+class NodeFakeHttp(HttpClient):
+    """Represent NodeFakeHttp."""
+
+    def fetch_json(self, _url: str) -> object:
+        """Implement fetch json."""
+        return [{"name": "Node.js", "slug": "node", "type": "node", "mtime": 10}]
+
+    def download_file(self, url: str, destination: str | Path):
+        """Implement download file."""
+        from smahtiepants.models import DownloadedFile
+
+        target = Path(destination)
+        slug = url.rstrip("/").split("/")[-2]
+        if url.endswith("/index.json"):
+            payload = {"entries": [{"name": "Node", "path": "node", "type": "Guide"}]}
+        else:
+            payload = {slug: "<h1>Node</h1><p>Node.js runtime documentation.</p>"}
+        target.write_text(json.dumps(payload), encoding="utf-8")
+        data = target.read_bytes()
+        import hashlib
+
+        return DownloadedFile(
+            path=str(target), bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+        )
+
+
+class PythonFakeHttp(HttpClient):
+    """Represent PythonFakeHttp."""
+
+    def fetch_json(self, _url: str) -> object:
+        """Implement fetch json."""
+        return [
+            {
+                "name": "Python",
+                "slug": "python~3.13",
+                "type": "python",
+                "version": "3.13",
+                "mtime": 10,
+                "alias": "py",
+            },
+            {
+                "name": "Python",
+                "slug": "python~3.14",
+                "type": "python",
+                "version": "3.14",
+                "mtime": 20,
+                "alias": "py",
+            },
+        ]
+
+    def download_file(self, url: str, destination: str | Path):
+        """Implement download file."""
+        from smahtiepants.models import DownloadedFile
+
+        target = Path(destination)
+        slug = url.rstrip("/").split("/")[-2]
+        if url.endswith("/index.json"):
+            payload = {"entries": [{"name": "Lists", "path": "lists", "type": "Guide"}]}
+        else:
+            payload = {"lists": f"<h1>Lists</h1><p>{slug} list documentation.</p>"}
         target.write_text(json.dumps(payload), encoding="utf-8")
         data = target.read_bytes()
         import hashlib
@@ -289,6 +358,36 @@ def test_devdocs_normalizes_docsets() -> None:
     assert [docset.slug for docset in docsets] == ["a", "b"]
     assert docsets[0].aliases == ["alpha"]
     assert docsets[0].db_size == 123
+
+
+def test_devdocs_resolves_aliases_and_curated_shorthands() -> None:
+    """Validate DevDocs identifiers resolve through aliases and curated shorthands."""
+    docsets = normalize_docsets(
+        [
+            {
+                "name": "Python",
+                "slug": "python~3.13",
+                "type": "python",
+                "version": "3.13",
+                "alias": "py",
+            },
+            {
+                "name": "Python",
+                "slug": "python~3.14",
+                "type": "python",
+                "version": "3.14",
+                "alias": "py",
+            },
+            {"name": "TypeScript", "slug": "typescript", "alias": "ts"},
+            {"name": "Node.js", "slug": "node"},
+        ]
+    )
+
+    assert find_docset(docsets, "ts").slug == "typescript"
+    assert find_docset(docsets, "py").slug == "python~3.14"
+    assert find_docset(docsets, "python").slug == "python~3.14"
+    assert find_docset(docsets, "python~3.13").slug == "python~3.13"
+    assert find_docset(docsets, "nodejs").slug == "node"
 
 
 def test_text_extracts_anchor_sections_and_normalizes_links() -> None:
@@ -491,6 +590,86 @@ def test_install_docset_writes_manifests_and_pages(tmp_path: Path) -> None:
     assert "Request headers" in page.content
 
 
+def test_install_docset_accepts_upstream_alias(tmp_path: Path) -> None:
+    """Validate docs install resolves upstream aliases to canonical slugs."""
+    result = install_docset(
+        "headers",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+
+    manifest = read_cache_manifest(tmp_path)
+
+    assert result.slug == "http"
+    assert "http" in manifest.docs
+    assert not (tmp_path / "docs" / "headers").exists()
+
+
+def test_install_docset_accepts_curated_alias(tmp_path: Path) -> None:
+    """Validate docs install resolves curated shorthands to canonical slugs."""
+    result = install_docset(
+        "nodejs",
+        str(tmp_path),
+        http=NodeFakeHttp(),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+
+    manifest = read_cache_manifest(tmp_path)
+
+    assert result.slug == "node"
+    assert "node" in manifest.docs
+    assert not (tmp_path / "docs" / "nodejs").exists()
+
+
+def test_install_docset_accepts_type_as_slug(tmp_path: Path) -> None:
+    """Validate docs install resolves language-like slugs to versioned docsets."""
+    result = install_docset(
+        "python",
+        str(tmp_path),
+        http=PythonFakeHttp(),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+
+    pages = list_pages(tmp_path, "python")
+    content = get_page_content(tmp_path, "python", pages["items"][0]["id"])
+
+    assert result.slug == "python~3.14"
+    assert pages["slug"] == "python~3.14"
+    assert "python~3.14 list documentation" in content.content
+
+
+def test_installed_docset_helpers_accept_aliases(tmp_path: Path) -> None:
+    """Validate installed docset helpers resolve stored aliases."""
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+
+    pages = list_pages(tmp_path, "headers")
+    content = get_page_content(tmp_path, "headers", pages["items"][0]["id"])
+
+    assert pages["slug"] == "http"
+    assert "Request headers" in content.content
+
+
+def test_remove_docset_accepts_aliases(tmp_path: Path) -> None:
+    """Validate docs remove resolves stored aliases."""
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+
+    result = remove_docset("headers", str(tmp_path))
+
+    assert result.slug == "http"
+    assert "http" not in read_cache_manifest(tmp_path).docs
+
+
 def test_docs_available_marks_installed_docsets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -519,6 +698,20 @@ def test_docset_filters_use_stored_aliases(tmp_path: Path) -> None:
     )
 
     assert resolve_docset_filters(tmp_path, languages=["headers"]) == {"http"}
+    assert resolve_docset_filters(tmp_path, slugs=["headers"]) == {"http"}
+
+
+def test_docset_slug_filters_match_language_metadata(tmp_path: Path) -> None:
+    """Validate slug filters accept language-like docset identifiers."""
+    install_docset(
+        "python",
+        str(tmp_path),
+        http=PythonFakeHttp(),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+
+    assert resolve_docset_filters(tmp_path, slugs=["python"]) == {"python~3.14"}
+    assert resolve_docset_filters(tmp_path, languages=["python"]) == {"python~3.14"}
 
 
 def test_docs_update_prints_progress(

@@ -106,6 +106,8 @@ Use `--root <path>` to serve or query a different local coding directory.
 
 The Python app supports the core runtime/server surface from the original TypeScript app: DevDocs source listing, install/update/remove, Markdown page extraction, embedding refresh/rebuild/status, Annoy-accelerated semantic search with keyword fallback, a read-only REST API, a minimal MCP HTTP endpoint, and a Copilot `sessionStart` hook endpoint. Repo-level Copilot plugin manifests are intentionally not installed into this repository so they do not conflict with the existing `smahties` MCP configuration.
 
+DevDocs aliases, common shorthands, and language-like docset names/types resolve to canonical cached docsets where possible, so inputs such as `js`, `ts`, `py`, `python`, `c++`, and `nodejs` can be used with install, update, remove, search filters, page reads, and embedding commands without creating duplicate cache entries.
+
 ## `smahties` indexing and search
 
 When running inside a Git repository, `smahties` stores state under the repository root and auto-indexes the runtime root. Outside a Git repository, state lives under the runtime root and auto-indexing is disabled.
