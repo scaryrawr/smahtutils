@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from wickedsmaht_config import Config as SharedConfig
 from wickedsmaht_config import ConfigError as SharedConfigError
+from wickedsmaht_config import SmahtiepantsSettings
 from wickedsmaht_config import config_path_from_home
 
 from .embeddings.chunks import (
@@ -192,7 +193,7 @@ def build_openai_config(shared: SharedConfig) -> OpenAiConfig:
     )
 
 
-def shared_smahtiepants_settings(shared: SharedConfig) -> object:
+def shared_smahtiepants_settings(shared: SharedConfig) -> SmahtiepantsSettings:
     """Return primary smahtiepants settings, falling back to legacy ddserve settings."""
 
     settings = shared.smahtiepants

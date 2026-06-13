@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from smahtiepants.cache import read_cache_manifest, resolve_cache_root
+from smahtiepants.cache import migrate_legacy_cache_root, read_cache_manifest, resolve_cache_root
 from smahtiepants.cli import run_cli
 from smahtiepants.config import (
     SmahtiepantsConfig,
@@ -256,6 +256,24 @@ def test_smahtiepants_cache_root_migrates_legacy_default_cache(tmp_path: Path) -
     assert migrated == tmp_path / ".cache" / "smahtiepants"
     assert (migrated / "manifest.json").is_file()
     assert not legacy.exists()
+
+
+def test_legacy_cache_migration_tolerates_concurrent_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate cache migration succeeds if another process already moved the legacy path."""
+    root = tmp_path / ".cache" / "smahtiepants"
+    legacy = tmp_path / ".cache" / "ddserve"
+    legacy.mkdir(parents=True)
+
+    def concurrent_replace(_self: Path, target: Path) -> None:
+        legacy.rmdir()
+        target.mkdir()
+        raise FileNotFoundError(str(legacy))
+
+    monkeypatch.setattr(Path, "replace", concurrent_replace)
+
+    assert migrate_legacy_cache_root(root, legacy) == root
 
 
 def test_devdocs_normalizes_docsets() -> None:

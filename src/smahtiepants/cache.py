@@ -69,6 +69,8 @@ def migrate_legacy_cache_root(root: Path, legacy_root: Path) -> Path:
     root.parent.mkdir(parents=True, exist_ok=True)
     try:
         legacy_root.replace(root)
+    except FileNotFoundError:
+        return root
     except FileExistsError:
         return root
     except OSError as exc:
