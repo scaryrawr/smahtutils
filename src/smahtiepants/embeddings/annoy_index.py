@@ -6,13 +6,13 @@ from pathlib import Path
 
 from annoy import AnnoyIndex
 
-from ddserve.cache import cache_paths
+from smahtiepants.cache import cache_paths
 
 from .storage import EmbeddingStorage
 
 
 class AnnoyIndexManager:
-    """Build, load, and query rebuildable ddserve embedding sidecar indexes."""
+    """Build, load, and query rebuildable smahtiepants embedding sidecar indexes."""
 
     def __init__(self, cache_root: str | Path, storage: EmbeddingStorage, trees: int = 10) -> None:
         """Implement init."""

@@ -10,6 +10,10 @@ from wickedsmaht_config import (
     DdserveEmbeddingSettings,
     DdserveServeSettings,
     DdserveSettings,
+    SmahtiepantsAuthSettings,
+    SmahtiepantsEmbeddingSettings,
+    SmahtiepantsServeSettings,
+    SmahtiepantsSettings,
     SettingError,
     config_path_from_home,
     resolve_setting,
@@ -33,7 +37,7 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
           "model": "chat",
           "text-embedding-model": "text-embed",
           "coding-embedding-model": "embed",
-          "ddserve": {
+          "smahtiepants": {
             "api-key-env": "DOCS_API_KEY",
             "embeddings": {
               "enabled": true,
@@ -49,7 +53,7 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
               "bind-address": "127.0.0.1",
               "port": 43877,
               "auth": {
-                "token-env": "DDSERVE_TOKEN"
+                "token-env": "SMAHTIEPANTS_TOKEN"
               }
             }
           }
@@ -63,9 +67,9 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
         model="chat",
         text_embedding_model="text-embed",
         coding_embedding_model="embed",
-        ddserve=DdserveSettings(
+        smahtiepants=SmahtiepantsSettings(
             api_key_env="DOCS_API_KEY",
-            embeddings=DdserveEmbeddingSettings(
+            embeddings=SmahtiepantsEmbeddingSettings(
                 enabled=True,
                 batch_size=8,
                 max_chunk_chars=1200,
@@ -75,12 +79,47 @@ def test_parses_keys_and_aliases(tmp_path: Path) -> None:
                 max_request_bytes=4096,
                 max_concurrent_requests=3,
             ),
-            serve=DdserveServeSettings(
+            serve=SmahtiepantsServeSettings(
                 bind_address="127.0.0.1",
                 port=43877,
-                auth=DdserveAuthSettings(token_env="DDSERVE_TOKEN"),
+                auth=SmahtiepantsAuthSettings(token_env="SMAHTIEPANTS_TOKEN"),
             ),
         ),
+    )
+
+
+def test_legacy_ddserve_config_key_is_supported(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        """
+        {
+          "ddserve": {
+            "api-key-env": "DOCS_API_KEY",
+            "embeddings": {
+              "batch-size": 8
+            },
+            "serve": {
+              "auth": {
+                "token-env": "DDSERVE_TOKEN"
+              }
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    loaded = Config.load_from_path(path)
+
+    assert loaded.smahtiepants == SmahtiepantsSettings(
+        api_key_env="DOCS_API_KEY",
+        embeddings=SmahtiepantsEmbeddingSettings(batch_size=8),
+        serve=SmahtiepantsServeSettings(auth=SmahtiepantsAuthSettings(token_env="DDSERVE_TOKEN")),
+    )
+    assert loaded.ddserve == DdserveSettings(
+        api_key_env="DOCS_API_KEY",
+        embeddings=DdserveEmbeddingSettings(batch_size=8),
+        serve=DdserveServeSettings(auth=DdserveAuthSettings(token_env="DDSERVE_TOKEN")),
     )
 
 

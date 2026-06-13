@@ -8,10 +8,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .config import DEFAULT_SERVE_BIND_ADDRESS, DEFAULT_SERVE_PORT, DdserveConfig
+from .config import (
+    DEFAULT_SERVE_AUTH_TOKEN_ENV,
+    DEFAULT_SERVE_BIND_ADDRESS,
+    DEFAULT_SERVE_PORT,
+    LEGACY_SERVE_AUTH_TOKEN_ENV,
+    SmahtiepantsConfig,
+)
 from .copilot_hooks import session_start_context
 from .embeddings.index import status_for_embeddings
-from .errors import DdserveError
+from .errors import SmahtiepantsError
 from .mcp_server import handle_mcp_request
 from .models import to_jsonable
 from .search import search_docs
@@ -19,7 +25,10 @@ from .server_shared import get_docset, get_page, get_page_content, list_docsets,
 
 
 def serve(
-    cache_root: str | Path, config: DdserveConfig, host: str | None = None, port: int | None = None
+    cache_root: str | Path,
+    config: SmahtiepantsConfig,
+    host: str | None = None,
+    port: int | None = None,
 ) -> None:
     """Implement serve."""
     bind = host or (
@@ -32,17 +41,17 @@ def serve(
     )
     handler = make_handler(str(cache_root), config, bind)
     server = ThreadingHTTPServer((bind, bind_port), handler)
-    print(f"ddserve listening on http://{bind}:{bind_port}")
+    print(f"smahtiepants listening on http://{bind}:{bind_port}")
     server.serve_forever()
 
 
-def make_handler(cache_root: str, config: DdserveConfig, bind_host: str):
+def make_handler(cache_root: str, config: SmahtiepantsConfig, bind_host: str):
     """Implement make handler."""
 
-    class DdserveHandler(BaseHTTPRequestHandler):
-        """Represent DdserveHandler."""
+    class SmahtiepantsHandler(BaseHTTPRequestHandler):
+        """Represent SmahtiepantsHandler."""
 
-        server_version = "ddserve/0.1.0"
+        server_version = "smahtiepants/0.1.0"
 
         def do_GET(self) -> None:
             """Implement do GET."""
@@ -76,7 +85,7 @@ def make_handler(cache_root: str, config: DdserveConfig, bind_host: str):
                         self.write_json({"error": "Unauthorized"}, HTTPStatus.UNAUTHORIZED)
                         return
                 self.route(method, parsed.path, parse_qs(parsed.query))
-            except DdserveError as exc:
+            except SmahtiepantsError as exc:
                 self.write_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:
                 self.write_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -86,7 +95,7 @@ def make_handler(cache_root: str, config: DdserveConfig, bind_host: str):
             if path == "/api" and method == "GET":
                 self.write_json(
                     {
-                        "name": "ddserve",
+                        "name": "smahtiepants",
                         "links": ["/api/docsets", "/api/search", "/api/embeddings/status"],
                     }
                 )
@@ -198,7 +207,10 @@ def make_handler(cache_root: str, config: DdserveConfig, bind_host: str):
             """Implement authorized."""
             if not config.serve or not config.serve.auth:
                 return True
-            expected = os.environ.get(config.serve.auth.token_env) or config.serve.auth.token
+            expected = os.environ.get(config.serve.auth.token_env)
+            if not expected and config.serve.auth.token_env == DEFAULT_SERVE_AUTH_TOKEN_ENV:
+                expected = os.environ.get(LEGACY_SERVE_AUTH_TOKEN_ENV)
+            expected = expected or config.serve.auth.token
             if not expected:
                 return False
             return self.headers.get("authorization") == f"Bearer {expected}"
@@ -229,7 +241,7 @@ def make_handler(cache_root: str, config: DdserveConfig, bind_host: str):
     def search_payload_from_body(body: object) -> dict[str, object]:
         """Implement search payload from body."""
         if not isinstance(body, dict):
-            raise DdserveError("Search body must be a JSON object")
+            raise SmahtiepantsError("Search body must be a JSON object")
         results = search_docs(
             cache_root,
             str(body.get("query") or ""),
@@ -240,7 +252,7 @@ def make_handler(cache_root: str, config: DdserveConfig, bind_host: str):
         )
         return {"matches": [to_jsonable(result) for result in results]}
 
-    return DdserveHandler
+    return SmahtiepantsHandler
 
 
 def first(query: dict[str, list[str]], key: str) -> str | None:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .cache import read_cache_manifest, read_docset_manifest
 from .embeddings.chunks import read_installed_page_markdown
-from .errors import DdserveError
+from .errors import SmahtiepantsError
 from .models import CacheManifestDocset, DocsetManifest, PageManifestEntry, to_jsonable
 
 
@@ -28,7 +28,7 @@ def get_docset(cache_root: str | Path, slug: str) -> DocsetManifest:
     """Return docset."""
     manifest = read_docset_manifest(cache_root, slug)
     if manifest is None:
-        raise DdserveError(f'Docset "{slug}" is not installed.')
+        raise SmahtiepantsError(f'Docset "{slug}" is not installed.')
     return manifest
 
 
@@ -64,7 +64,7 @@ def get_page(cache_root: str | Path, slug: str, page_id: str) -> PageManifestEnt
     for page in manifest.pages:
         if page.id == page_id:
             return page
-    raise DdserveError(f'Page "{page_id}" is not installed for docset "{slug}".')
+    raise SmahtiepantsError(f'Page "{page_id}" is not installed for docset "{slug}".')
 
 
 def get_page_content(

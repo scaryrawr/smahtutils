@@ -4,11 +4,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from ddserve.config import DdserveConfig, resolve_openai_api_key
-from ddserve.errors import DdserveError
-from ddserve.text import remove_unpaired_surrogates
+from smahtiepants.config import SmahtiepantsConfig, resolve_openai_api_key
+from smahtiepants.errors import SmahtiepantsError
+from smahtiepants.text import remove_unpaired_surrogates
 
-INTERNAL_API_KEY_PLACEHOLDER = "ddserve-local-openai-compatible-endpoint"
+INTERNAL_API_KEY_PLACEHOLDER = "smahtiepants-local-openai-compatible-endpoint"
 EmbeddingInput = str | Sequence[str]
 EmbeddingVector = list[float]
 
@@ -46,15 +46,17 @@ class EmbeddingBatchLimits:
 
 
 def create_openai_embedding_client(
-    config: DdserveConfig, env: dict[str, str] | None = None
+    config: SmahtiepantsConfig, env: dict[str, str] | None = None
 ) -> EmbeddingClient:
     """Implement create openai embedding client."""
     if config.openai is None:
-        raise DdserveError("OpenAI embeddings are not configured")
+        raise SmahtiepantsError("OpenAI embeddings are not configured")
     try:
         from openai import OpenAI
     except ImportError as exc:
-        raise DdserveError("official `openai` package is required to create embeddings") from exc
+        raise SmahtiepantsError(
+            "official `openai` package is required to create embeddings"
+        ) from exc
     api_key = (
         resolve_openai_api_key(config, env) or ("placeholder", INTERNAL_API_KEY_PLACEHOLDER)
     )[1]
@@ -63,15 +65,17 @@ def create_openai_embedding_client(
 
 
 def create_openai_async_embedding_client(
-    config: DdserveConfig, env: dict[str, str] | None = None
+    config: SmahtiepantsConfig, env: dict[str, str] | None = None
 ) -> AsyncClosableEmbeddingClient:
     """Create an async OpenAI-compatible embedding client."""
     if config.openai is None:
-        raise DdserveError("OpenAI embeddings are not configured")
+        raise SmahtiepantsError("OpenAI embeddings are not configured")
     try:
         from openai import AsyncOpenAI
     except ImportError as exc:
-        raise DdserveError("official `openai` package is required to create embeddings") from exc
+        raise SmahtiepantsError(
+            "official `openai` package is required to create embeddings"
+        ) from exc
     api_key = (
         resolve_openai_api_key(config, env) or ("placeholder", INTERNAL_API_KEY_PLACEHOLDER)
     )[1]
@@ -93,7 +97,7 @@ class OpenAiEmbeddingClient:
         try:
             response = self.client.embeddings.create(model=self.model, input=normalized)
         except Exception as exc:
-            raise DdserveError(f"OpenAI embedding request failed: {exc}") from exc
+            raise SmahtiepantsError(f"OpenAI embedding request failed: {exc}") from exc
         data = getattr(response, "data", None)
         return extract_embedding_vectors(data, expected_embedding_count(normalized))
 
@@ -112,7 +116,7 @@ class AsyncOpenAiEmbeddingClient:
         try:
             response = await self.client.embeddings.create(model=self.model, input=normalized)
         except Exception as exc:
-            raise DdserveError(f"OpenAI embedding request failed: {exc}") from exc
+            raise SmahtiepantsError(f"OpenAI embedding request failed: {exc}") from exc
         data = getattr(response, "data", None)
         return extract_embedding_vectors(data, expected_embedding_count(normalized))
 
@@ -127,7 +131,7 @@ def normalize_embedding_input(input: EmbeddingInput) -> str | list[str]:
         return remove_unpaired_surrogates(input)
     values = [remove_unpaired_surrogates(value) for value in input]
     if not values:
-        raise DdserveError("Embedding input must include at least one text value")
+        raise SmahtiepantsError("Embedding input must include at least one text value")
     return values
 
 
@@ -142,7 +146,7 @@ def embedding_batch_ranges(
 ) -> list[tuple[int, int]]:
     """Return half-open ranges that fit embedding request limits."""
     if limits.max_inputs <= 0 or limits.max_request_bytes <= 0:
-        raise DdserveError("Embedding batch limits must be greater than zero")
+        raise SmahtiepantsError("Embedding batch limits must be greater than zero")
     ranges: list[tuple[int, int]] = []
     start = 0
     request_bytes = 0
@@ -166,9 +170,9 @@ def embedding_batch_ranges(
 def extract_embedding_vectors(data: object, expected_count: int) -> list[EmbeddingVector]:
     """Implement extract embedding vectors."""
     if not isinstance(data, list):
-        raise DdserveError("OpenAI embedding response was invalid: expected a data array")
+        raise SmahtiepantsError("OpenAI embedding response was invalid: expected a data array")
     if len(data) != expected_count:
-        raise DdserveError(
+        raise SmahtiepantsError(
             f"OpenAI embedding response was invalid: expected {expected_count} embeddings, received {len(data)}"
         )
     vectors: list[EmbeddingVector | None] = [None] * expected_count
@@ -177,20 +181,22 @@ def extract_embedding_vectors(data: object, expected_count: int) -> list[Embeddi
         index = getattr(item, "index", None)
         embedding = getattr(item, "embedding", None)
         if not isinstance(index, int) or index < 0 or index >= expected_count:
-            raise DdserveError(
+            raise SmahtiepantsError(
                 "OpenAI embedding response was invalid: embedding index was out of range"
             )
         if vectors[index] is not None:
-            raise DdserveError("OpenAI embedding response was invalid: duplicate embedding index")
+            raise SmahtiepantsError(
+                "OpenAI embedding response was invalid: duplicate embedding index"
+            )
         if not isinstance(embedding, list):
-            raise DdserveError(
+            raise SmahtiepantsError(
                 "OpenAI embedding response was invalid: embedding vector was not an array"
             )
         vector = validate_embedding_vector(embedding, index, dimensions)
         dimensions = dimensions or len(vector)
         vectors[index] = vector
     if any(vector is None for vector in vectors):
-        raise DdserveError("OpenAI embedding response was invalid: missing embedding vector")
+        raise SmahtiepantsError("OpenAI embedding response was invalid: missing embedding vector")
     return [vector for vector in vectors if vector is not None]
 
 
@@ -199,17 +205,17 @@ def validate_embedding_vector(
 ) -> EmbeddingVector:
     """Validate embedding vector."""
     if not vector:
-        raise DdserveError(
+        raise SmahtiepantsError(
             f"OpenAI embedding response was invalid: embedding at index {index} was empty"
         )
     if dimensions is not None and len(vector) != dimensions:
-        raise DdserveError(
+        raise SmahtiepantsError(
             f"OpenAI embedding response dimensions mismatch: expected {dimensions}, received {len(vector)} at index {index}"
         )
     out: list[float] = []
     for value in vector:
         if not isinstance(value, int | float):
-            raise DdserveError(
+            raise SmahtiepantsError(
                 f"OpenAI embedding response was invalid: embedding at index {index} contained non-numeric values"
             )
         out.append(float(value))

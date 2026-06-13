@@ -20,7 +20,7 @@ from .cache import (
     replace_directory,
     write_cache_manifest,
 )
-from .config import DdserveConfig, load_config
+from .config import SmahtiepantsConfig, load_config
 from .devdocs import (
     DEV_DOCS_INDEX_URL,
     docset_db_url,
@@ -32,7 +32,7 @@ from .embeddings.annoy_index import AnnoyIndexManager
 from .embeddings.index import refresh_docset_embeddings
 from .embeddings.openai import AsyncEmbeddingClient, EmbeddingClient
 from .embeddings.storage import open_embedding_storage
-from .errors import DdserveError, get_error_message
+from .errors import SmahtiepantsError, get_error_message
 from .http import FetchHttpClient, HttpClient
 from .models import (
     CACHE_SCHEMA_VERSION,
@@ -83,7 +83,7 @@ def install_docset(
     offline: bool = False,
     now: datetime | None = None,
     config_path: str | None = None,
-    config: DdserveConfig | None = None,
+    config: SmahtiepantsConfig | None = None,
     env: dict[str, str] | None = None,
     embedding_client: EmbeddingClient | None = None,
     async_embedding_client: AsyncEmbeddingClient | None = None,
@@ -96,8 +96,8 @@ def install_docset(
     available = get_available_docsets(cache_root, http=http, offline=offline, now=now)
     summary = find_docset(available.docsets, slug)
     if summary is None:
-        raise DdserveError(
-            f'Unknown DevDocs docset "{slug}". Run "ddserve docs available" to list valid slugs.'
+        raise SmahtiepantsError(
+            f'Unknown DevDocs docset "{slug}". Run "smahtiepants docs available" to list valid slugs.'
         )
     resolved_config = config or load_config(config_path, env).config
     existing = read_docset_manifest(cache_root, slug)
@@ -162,13 +162,13 @@ def install_docset(
         index = json.loads((raw_dir / "index.json").read_text(encoding="utf-8"))
         db = json.loads((raw_dir / "db.json").read_text(encoding="utf-8"))
         if not isinstance(index, dict) or not isinstance(db, dict):
-            raise DdserveError(f'Downloaded "{slug}", but DevDocs data was invalid')
+            raise SmahtiepantsError(f'Downloaded "{slug}", but DevDocs data was invalid')
         extracted = extract_markdown_pages(
             index, {str(key): str(value) for key, value in db.items()}, pages_dir
         )
         pages = extracted["pages"]
         if not pages:
-            raise DdserveError(f'Downloaded "{slug}", but no pages could be extracted')
+            raise SmahtiepantsError(f'Downloaded "{slug}", but no pages could be extracted')
         timestamp = (now or datetime.now(UTC)).isoformat().replace("+00:00", "Z")
         manifest = DocsetManifest(
             schema_version=CACHE_SCHEMA_VERSION,
@@ -319,7 +319,7 @@ def remove_docset(slug: str, cache_root: str) -> RemoveResult:
         manifest = read_cache_manifest(cache_root)
         docset = manifest.docs.get(slug)
         if docset is None:
-            raise DdserveError(f'Docset "{slug}" is not installed.')
+            raise SmahtiepantsError(f'Docset "{slug}" is not installed.')
         shutil.rmtree(paths.docs_root / slug, ignore_errors=True)
         manifest.docs.pop(slug, None)
         manifest = type(manifest)(
@@ -333,10 +333,10 @@ def remove_docset(slug: str, cache_root: str) -> RemoveResult:
         lock.release()
 
 
-def resolve_update_config(kwargs: dict[str, object]) -> DdserveConfig:
+def resolve_update_config(kwargs: dict[str, object]) -> SmahtiepantsConfig:
     """Resolve docs update config once for a multi-docset run."""
     config = kwargs.get("config")
-    if isinstance(config, DdserveConfig):
+    if isinstance(config, SmahtiepantsConfig):
         return config
     config_path = kwargs.get("config_path")
     env = kwargs.get("env")
@@ -348,7 +348,7 @@ def resolve_update_config(kwargs: dict[str, object]) -> DdserveConfig:
 
 def ensure_deferred_annoy_index(
     cache_root: str,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     results: list[InstallResult],
 ) -> list[InstallResult]:
     """Build the Annoy sidecar once after a multi-docset embedding update."""
@@ -388,7 +388,7 @@ def is_current(existing: DocsetManifest | None, summary: object) -> bool:
 def refresh_embeddings_for_installed_docset(
     cache_root: str,
     manifest: DocsetManifest,
-    config: DdserveConfig,
+    config: SmahtiepantsConfig,
     warnings: list[str],
     env: dict[str, str] | None,
     embedding_client: EmbeddingClient | None,

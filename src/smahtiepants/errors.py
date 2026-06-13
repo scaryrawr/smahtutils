@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 
-class DdserveError(Exception):
-    """Base error for user-facing ddserve failures."""
+class SmahtiepantsError(Exception):
+    """Base error for user-facing smahtiepants failures."""
 
 
-class HttpError(DdserveError):
+DdserveError = SmahtiepantsError
+
+
+class HttpError(SmahtiepantsError):
     """Represent HttpError."""
 
     def __init__(self, message: str, status: int, url: str) -> None:

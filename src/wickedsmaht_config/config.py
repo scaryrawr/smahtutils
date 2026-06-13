@@ -28,8 +28,8 @@ class SettingError(Exception):
 
 
 @dataclass(frozen=True)
-class DdserveEmbeddingSettings:
-    """Optional ddserve embedding defaults from shared config."""
+class SmahtiepantsEmbeddingSettings:
+    """Optional smahtiepants embedding defaults from shared config."""
 
     enabled: bool | None = None
     batch_size: int | None = None
@@ -42,38 +42,38 @@ class DdserveEmbeddingSettings:
 
 
 @dataclass(frozen=True)
-class DdserveAuthSettings:
-    """Optional ddserve bearer auth defaults from shared config."""
+class SmahtiepantsAuthSettings:
+    """Optional smahtiepants bearer auth defaults from shared config."""
 
     token_env: str | None = None
     token: str | None = None
 
 
 @dataclass(frozen=True)
-class DdserveCorsSettings:
-    """Optional ddserve CORS defaults from shared config."""
+class SmahtiepantsCorsSettings:
+    """Optional smahtiepants CORS defaults from shared config."""
 
     origins: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
-class DdserveServeSettings:
-    """Optional ddserve HTTP server defaults from shared config."""
+class SmahtiepantsServeSettings:
+    """Optional smahtiepants HTTP server defaults from shared config."""
 
     bind_address: str | None = None
     port: int | None = None
-    auth: DdserveAuthSettings | None = None
-    cors: DdserveCorsSettings | None = None
+    auth: SmahtiepantsAuthSettings | None = None
+    cors: SmahtiepantsCorsSettings | None = None
 
 
 @dataclass(frozen=True)
-class DdserveSettings:
-    """Optional ddserve-specific settings from shared config."""
+class SmahtiepantsSettings:
+    """Optional smahtiepants-specific settings from shared config."""
 
     api_key_env: str | None = None
     api_key: str | None = None
-    embeddings: DdserveEmbeddingSettings = field(default_factory=DdserveEmbeddingSettings)
-    serve: DdserveServeSettings | None = None
+    embeddings: SmahtiepantsEmbeddingSettings = field(default_factory=SmahtiepantsEmbeddingSettings)
+    serve: SmahtiepantsServeSettings | None = None
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,8 @@ class Config:
     model: str | None = None
     text_embedding_model: str | None = None
     coding_embedding_model: str | None = None
-    ddserve: DdserveSettings = field(default_factory=DdserveSettings)
+    smahtiepants: SmahtiepantsSettings = field(default_factory=SmahtiepantsSettings)
+    ddserve: SmahtiepantsSettings = field(default_factory=SmahtiepantsSettings)
 
     @classmethod
     def load(cls) -> "Config":
@@ -116,6 +117,13 @@ class Config:
         if not isinstance(data, dict):
             raise ConfigError(f"failed to parse config {config_path}: expected JSON object")
 
+        smahtiepants_data = _optional_object(data, "smahtiepants")
+        legacy_ddserve_data = _optional_object(data, "ddserve")
+        settings_data = (
+            smahtiepants_data if smahtiepants_data is not None else legacy_ddserve_data or {}
+        )
+        settings_path = "smahtiepants" if smahtiepants_data is not None else "ddserve"
+
         return cls(
             base_url=_optional_string(data, "base_url", "base-url"),
             model=_optional_string(data, "model"),
@@ -125,7 +133,8 @@ class Config:
             coding_embedding_model=_optional_string(
                 data, "coding_embedding_model", "coding-embedding-model"
             ),
-            ddserve=_parse_ddserve_settings(_optional_object(data, "ddserve") or {}, "ddserve"),
+            smahtiepants=_parse_smahtiepants_settings(settings_data, settings_path),
+            ddserve=_parse_smahtiepants_settings(legacy_ddserve_data or {}, "ddserve"),
         )
 
 
@@ -150,25 +159,25 @@ def resolve_setting(
     raise SettingError(flag_name, config_key)
 
 
-def _parse_ddserve_settings(data: dict[object, object], path: str) -> DdserveSettings:
-    """Parse the optional shared ddserve settings object."""
+def _parse_smahtiepants_settings(data: dict[object, object], path: str) -> SmahtiepantsSettings:
+    """Parse the optional shared smahtiepants settings object."""
 
-    return DdserveSettings(
+    return SmahtiepantsSettings(
         api_key_env=_optional_string(data, "api_key_env", "api-key-env", "apiKeyEnv"),
         api_key=_optional_string(data, "api_key", "api-key", "apiKey"),
-        embeddings=_parse_ddserve_embedding_settings(
+        embeddings=_parse_smahtiepants_embedding_settings(
             _optional_object(data, "embeddings") or {}, f"{path}.embeddings"
         ),
-        serve=_parse_ddserve_serve_settings(_optional_object(data, "serve"), f"{path}.serve"),
+        serve=_parse_smahtiepants_serve_settings(_optional_object(data, "serve"), f"{path}.serve"),
     )
 
 
-def _parse_ddserve_embedding_settings(
+def _parse_smahtiepants_embedding_settings(
     data: dict[object, object], path: str
-) -> DdserveEmbeddingSettings:
-    """Parse optional ddserve embedding controls."""
+) -> SmahtiepantsEmbeddingSettings:
+    """Parse optional smahtiepants embedding controls."""
 
-    return DdserveEmbeddingSettings(
+    return SmahtiepantsEmbeddingSettings(
         enabled=_optional_bool(data, "enabled"),
         batch_size=_optional_int(
             data, f"{path}.batch_size", "batch_size", "batch-size", "batchSize"
@@ -206,43 +215,50 @@ def _parse_ddserve_embedding_settings(
     )
 
 
-def _parse_ddserve_serve_settings(
+def _parse_smahtiepants_serve_settings(
     data: dict[object, object] | None, path: str
-) -> DdserveServeSettings | None:
-    """Parse optional ddserve HTTP server controls."""
+) -> SmahtiepantsServeSettings | None:
+    """Parse optional smahtiepants HTTP server controls."""
 
     if data is None:
         return None
-    return DdserveServeSettings(
+    return SmahtiepantsServeSettings(
         bind_address=_optional_string(data, "bind_address", "bind-address", "bindAddress"),
         port=_optional_int(data, f"{path}.port", "port"),
-        auth=_parse_ddserve_auth_settings(_optional_object(data, "auth"), f"{path}.auth"),
-        cors=_parse_ddserve_cors_settings(_optional_object(data, "cors"), f"{path}.cors"),
+        auth=_parse_smahtiepants_auth_settings(_optional_object(data, "auth"), f"{path}.auth"),
+        cors=_parse_smahtiepants_cors_settings(_optional_object(data, "cors"), f"{path}.cors"),
     )
 
 
-def _parse_ddserve_auth_settings(
+def _parse_smahtiepants_auth_settings(
     data: dict[object, object] | None, path: str
-) -> DdserveAuthSettings | None:
-    """Parse optional ddserve auth controls."""
+) -> SmahtiepantsAuthSettings | None:
+    """Parse optional smahtiepants auth controls."""
 
     if data is None:
         return None
-    return DdserveAuthSettings(
+    return SmahtiepantsAuthSettings(
         token_env=_optional_string(data, "token_env", "token-env", "tokenEnv"),
         token=_optional_string(data, "token"),
     )
 
 
-def _parse_ddserve_cors_settings(
+def _parse_smahtiepants_cors_settings(
     data: dict[object, object] | None, path: str
-) -> DdserveCorsSettings | None:
-    """Parse optional ddserve CORS controls."""
+) -> SmahtiepantsCorsSettings | None:
+    """Parse optional smahtiepants CORS controls."""
 
     if data is None:
         return None
     origins = _optional_string_list(data, f"{path}.origins", "origins")
-    return DdserveCorsSettings(origins=origins or [])
+    return SmahtiepantsCorsSettings(origins=origins or [])
+
+
+DdserveEmbeddingSettings = SmahtiepantsEmbeddingSettings
+DdserveAuthSettings = SmahtiepantsAuthSettings
+DdserveCorsSettings = SmahtiepantsCorsSettings
+DdserveServeSettings = SmahtiepantsServeSettings
+DdserveSettings = SmahtiepantsSettings
 
 
 def _optional_object(data: dict[object, object], key: str) -> dict[object, object] | None:

@@ -62,7 +62,10 @@ class FetchHttpClient(HttpClient):
         """Implement open."""
         request = urllib.request.Request(
             url,
-            headers={"user-agent": "ddserve/0.1.0", "accept": "application/json,text/html,*/*"},
+            headers={
+                "user-agent": "smahtiepants/0.1.0",
+                "accept": "application/json,text/html,*/*",
+            },
         )
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):

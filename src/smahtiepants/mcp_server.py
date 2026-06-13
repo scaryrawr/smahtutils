@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import DdserveConfig
+from .config import SmahtiepantsConfig
 from .models import to_jsonable
 from .search import search_docs
 from .server_shared import get_page_content, list_docsets
 
 
 def handle_mcp_request(
-    cache_root: str | Path, config: DdserveConfig, payload: dict[str, object]
+    cache_root: str | Path, config: SmahtiepantsConfig, payload: dict[str, object]
 ) -> dict[str, object]:
     """Handle mcp request."""
     method = str(payload.get("method") or "")
@@ -19,7 +19,7 @@ def handle_mcp_request(
             result: object = {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {"tools": {}, "resources": {}},
-                "serverInfo": {"name": "ddserve", "version": "0.1.0"},
+                "serverInfo": {"name": "smahtiepants", "version": "0.1.0"},
             }
         elif method == "tools/list":
             result = {
@@ -57,7 +57,7 @@ def handle_mcp_request(
 
 
 def tool_text(
-    cache_root: str | Path, config: DdserveConfig, name: str, arguments: dict[str, object]
+    cache_root: str | Path, config: SmahtiepantsConfig, name: str, arguments: dict[str, object]
 ) -> str:
     """Implement tool text."""
     if name == "list_docsets":
@@ -84,7 +84,7 @@ def tool_text(
 
 def read_resource(cache_root: str | Path, uri: str) -> dict[str, object]:
     """Read resource."""
-    prefix = "ddserve://docsets/"
+    prefix = "smahtiepants://docsets/"
     if not uri.startswith(prefix):
         raise ValueError(f"Unsupported resource URI: {uri}")
     rest = uri[len(prefix) :]
