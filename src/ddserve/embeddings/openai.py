@@ -29,6 +29,14 @@ class AsyncEmbeddingClient(Protocol):
         ...
 
 
+class AsyncClosableEmbeddingClient(AsyncEmbeddingClient, Protocol):
+    """Represent an async embedding client with explicit resource cleanup."""
+
+    async def aclose(self) -> None:
+        """Close any async resources owned by the client."""
+        ...
+
+
 @dataclass(frozen=True)
 class EmbeddingBatchLimits:
     """Embedding request size limits."""
@@ -56,7 +64,7 @@ def create_openai_embedding_client(
 
 def create_openai_async_embedding_client(
     config: DdserveConfig, env: dict[str, str] | None = None
-) -> AsyncEmbeddingClient:
+) -> AsyncClosableEmbeddingClient:
     """Create an async OpenAI-compatible embedding client."""
     if config.openai is None:
         raise DdserveError("OpenAI embeddings are not configured")
@@ -107,6 +115,10 @@ class AsyncOpenAiEmbeddingClient:
             raise DdserveError(f"OpenAI embedding request failed: {exc}") from exc
         data = getattr(response, "data", None)
         return extract_embedding_vectors(data, expected_embedding_count(normalized))
+
+    async def aclose(self) -> None:
+        """Close the underlying async OpenAI client."""
+        await self.client.close()
 
 
 def normalize_embedding_input(input: EmbeddingInput) -> str | list[str]:
