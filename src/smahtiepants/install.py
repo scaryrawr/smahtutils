@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .aliases import resolve_installed_docset_slug
 from .cache import (
     acquire_docset_lock,
     assert_safe_path_segment,
@@ -91,7 +92,6 @@ def install_docset(
     on_embedding_progress: EmbeddingProgressCallback | None = None,
 ) -> InstallResult:
     """Implement install docset."""
-    assert_safe_path_segment(slug, "docset slug")
     paths = ensure_cache_root(cache_root)
     available = get_available_docsets(cache_root, http=http, offline=offline, now=now)
     summary = find_docset(available.docsets, slug)
@@ -99,8 +99,10 @@ def install_docset(
         raise SmahtiepantsError(
             f'Unknown DevDocs docset "{slug}". Run "smahtiepants docs available" to list valid slugs.'
         )
+    canonical_slug = summary.slug
+    assert_safe_path_segment(canonical_slug, "docset slug")
     resolved_config = config or load_config(config_path, env).config
-    existing = read_docset_manifest(cache_root, slug)
+    existing = read_docset_manifest(cache_root, canonical_slug)
     if not force and is_current(existing, summary):
         warnings = [*available.warnings]
         embedding_result = refresh_embeddings_for_installed_docset(
@@ -115,7 +117,7 @@ def install_docset(
             on_embedding_progress,
         )
         return InstallResult(
-            slug=slug,
+            slug=canonical_slug,
             name=summary.name,
             status="skipped",
             pages=len(existing.pages),
@@ -126,9 +128,10 @@ def install_docset(
             skipped_embedding_chunks=embedding_result.get("skipped", 0),
             annoy_indexed=bool(embedding_result.get("annoy", 0)),
         )
-    lock = acquire_docset_lock(cache_root, slug)
+    lock = acquire_docset_lock(cache_root, canonical_slug)
     stage_dir = (
-        paths.docs_root / f"{slug}.partial-{os.getpid()}-{int(datetime.now().timestamp() * 1000)}"
+        paths.docs_root
+        / f"{canonical_slug}.partial-{os.getpid()}-{int(datetime.now().timestamp() * 1000)}"
     )
     try:
         raw_dir = stage_dir / "raw"
@@ -136,8 +139,8 @@ def install_docset(
         raw_dir.mkdir(parents=True, exist_ok=True)
         pages_dir.mkdir(parents=True, exist_ok=True)
         client = http or FetchHttpClient()
-        index_url = docset_index_url(slug)
-        db_url = docset_db_url(slug)
+        index_url = docset_index_url(canonical_slug)
+        db_url = docset_db_url(canonical_slug)
         raw_files: list[RawFileManifestEntry] = []
         atomic_write_json(raw_dir / "docset.json", to_jsonable(summary))
         raw_files.append(file_manifest_entry(raw_dir / "docset.json", "raw/docset.json"))
@@ -162,13 +165,15 @@ def install_docset(
         index = json.loads((raw_dir / "index.json").read_text(encoding="utf-8"))
         db = json.loads((raw_dir / "db.json").read_text(encoding="utf-8"))
         if not isinstance(index, dict) or not isinstance(db, dict):
-            raise SmahtiepantsError(f'Downloaded "{slug}", but DevDocs data was invalid')
+            raise SmahtiepantsError(f'Downloaded "{canonical_slug}", but DevDocs data was invalid')
         extracted = extract_markdown_pages(
             index, {str(key): str(value) for key, value in db.items()}, pages_dir
         )
         pages = extracted["pages"]
         if not pages:
-            raise SmahtiepantsError(f'Downloaded "{slug}", but no pages could be extracted')
+            raise SmahtiepantsError(
+                f'Downloaded "{canonical_slug}", but no pages could be extracted'
+            )
         timestamp = (now or datetime.now(UTC)).isoformat().replace("+00:00", "Z")
         manifest = DocsetManifest(
             schema_version=CACHE_SCHEMA_VERSION,
@@ -191,7 +196,7 @@ def install_docset(
             skipped_entries=int(extracted["skippedEntries"]),
         )
         atomic_write_json(stage_dir / "manifest.json", to_jsonable(manifest))
-        replace_directory(stage_dir, paths.docs_root / slug)
+        replace_directory(stage_dir, paths.docs_root / canonical_slug)
         update_top_level_manifest(cache_root, manifest)
         warnings = [*available.warnings]
         embedding_result = refresh_embeddings_for_installed_docset(
@@ -206,7 +211,7 @@ def install_docset(
             on_embedding_progress,
         )
         return InstallResult(
-            slug=slug,
+            slug=canonical_slug,
             name=summary.name,
             status="updated" if existing else "installed",
             pages=len(pages),
@@ -247,7 +252,7 @@ def install_docsets(
             )
         result = install_docset(slug, cache_root, **install_kwargs)
         if on_progress:
-            on_progress(slug, index, total, "done", result)
+            on_progress(result.slug, index, total, "done", result)
         results.append(result)
     return results
 
@@ -269,7 +274,7 @@ def update_docsets(
             )
         result = install_docset(slug, cache_root, **install_kwargs)
         if on_progress:
-            on_progress(slug, 1, 1, "done", result)
+            on_progress(result.slug, 1, 1, "done", result)
         return [result]
     manifest = read_cache_manifest(cache_root)
     slugs = sorted(manifest.docs)
@@ -312,23 +317,24 @@ def update_docsets(
 
 def remove_docset(slug: str, cache_root: str) -> RemoveResult:
     """Implement remove docset."""
-    assert_safe_path_segment(slug, "docset slug")
+    canonical_slug = resolve_installed_docset_slug(cache_root, slug) or slug
+    assert_safe_path_segment(canonical_slug, "docset slug")
     paths = ensure_cache_root(cache_root)
-    lock = acquire_docset_lock(cache_root, slug)
+    lock = acquire_docset_lock(cache_root, canonical_slug)
     try:
         manifest = read_cache_manifest(cache_root)
-        docset = manifest.docs.get(slug)
+        docset = manifest.docs.get(canonical_slug)
         if docset is None:
             raise SmahtiepantsError(f'Docset "{slug}" is not installed.')
-        shutil.rmtree(paths.docs_root / slug, ignore_errors=True)
-        manifest.docs.pop(slug, None)
+        shutil.rmtree(paths.docs_root / canonical_slug, ignore_errors=True)
+        manifest.docs.pop(canonical_slug, None)
         manifest = type(manifest)(
             schema_version=manifest.schema_version,
             updated_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             docs=manifest.docs,
         )
         write_cache_manifest(cache_root, manifest)
-        return RemoveResult(slug=slug, name=docset.name, pages=docset.page_count)
+        return RemoveResult(slug=canonical_slug, name=docset.name, pages=docset.page_count)
     finally:
         lock.release()
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from smahtiepants.aliases import resolve_installed_docset_slug
 from smahtiepants.cache import read_cache_manifest, read_docset_manifest
 from smahtiepants.config import SmahtiepantsConfig
 from smahtiepants.errors import SmahtiepantsError
@@ -140,11 +141,17 @@ def status_for_embeddings(
 ) -> EmbeddingStatus:
     """Implement status for embeddings."""
     manifest = read_cache_manifest(cache_root)
-    docs = {slug: manifest.docs[slug]} if slug and slug in manifest.docs else manifest.docs
+    canonical_slug = resolve_installed_docset_slug(cache_root, slug) if slug else None
+    stats_slug = canonical_slug or slug
+    docs = (
+        {canonical_slug: manifest.docs[canonical_slug]}
+        if canonical_slug and canonical_slug in manifest.docs
+        else manifest.docs
+    )
     installed_pages = sum(doc.page_count for doc in docs.values())
     storage = open_embedding_storage(cache_root)
     try:
-        stats = storage.stats(slug)
+        stats = storage.stats(stats_slug)
         return EmbeddingStatus(
             database_path=str(storage.path),
             enabled=config.embeddings.enabled,
@@ -169,7 +176,8 @@ def refresh_installed_slug(
     client: EmbeddingClient | None = None,
 ) -> dict[str, int]:
     """Implement refresh installed slug."""
-    manifest = read_docset_manifest(cache_root, slug)
+    canonical_slug = resolve_installed_docset_slug(cache_root, slug) or slug
+    manifest = read_docset_manifest(cache_root, canonical_slug)
     if manifest is None:
         raise SmahtiepantsError(f'Docset "{slug}" is not installed.')
     return refresh_docset_embeddings(cache_root, manifest, config, env, client)

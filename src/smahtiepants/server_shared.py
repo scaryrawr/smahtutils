@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from .aliases import resolve_installed_docset_slug
 from .cache import read_cache_manifest, read_docset_manifest
 from .embeddings.chunks import read_installed_page_markdown
 from .errors import SmahtiepantsError
@@ -26,7 +27,8 @@ def list_docsets(cache_root: str | Path) -> list[CacheManifestDocset]:
 
 def get_docset(cache_root: str | Path, slug: str) -> DocsetManifest:
     """Return docset."""
-    manifest = read_docset_manifest(cache_root, slug)
+    canonical_slug = resolve_installed_docset_slug(cache_root, slug) or slug
+    manifest = read_docset_manifest(cache_root, canonical_slug)
     if manifest is None:
         raise SmahtiepantsError(f'Docset "{slug}" is not installed.')
     return manifest
@@ -50,7 +52,7 @@ def list_pages(
         pages = [page for page in pages if page.type == type_]
     bounded_limit = max(1, min(limit, 500))
     return {
-        "slug": slug,
+        "slug": manifest.slug,
         "items": [to_jsonable(page) for page in pages[offset : offset + bounded_limit]],
         "limit": bounded_limit,
         "offset": max(0, offset),
@@ -75,8 +77,11 @@ def get_page_content(
     end_line: int | None = None,
 ) -> PageContent:
     """Return page content."""
-    page = get_page(cache_root, slug, page_id)
-    content = read_installed_page_markdown(cache_root, slug, page)
+    manifest = get_docset(cache_root, slug)
+    page = next((item for item in manifest.pages if item.id == page_id), None)
+    if page is None:
+        raise SmahtiepantsError(f'Page "{page_id}" is not installed for docset "{slug}".')
+    content = read_installed_page_markdown(cache_root, manifest.slug, page)
     lines = content.splitlines()
     total = len(lines)
     start = max(1, start_line or 1)

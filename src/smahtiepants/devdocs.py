@@ -7,6 +7,7 @@ from .cache import atomic_write_json, ensure_cache_root, read_json_file
 from .errors import SmahtiepantsError, get_error_message
 from .http import FetchHttpClient, HttpClient
 from .models import DEV_DOCS_SOURCE, AvailableDocsetsResult, DocsetSummary
+from .aliases import find_docset_by_identifier
 
 DEV_DOCS_INDEX_URL = "https://devdocs.io/docs.json"
 DEV_DOCS_DOCUMENTS_BASE_URL = "https://documents.devdocs.io"
@@ -53,7 +54,7 @@ def get_available_docsets(
 
 def find_docset(docsets: list[DocsetSummary], slug: str) -> DocsetSummary | None:
     """Implement find docset."""
-    return next((docset for docset in docsets if docset.slug == slug), None)
+    return find_docset_by_identifier(docsets, slug)
 
 
 def docset_index_url(slug: str) -> str:
