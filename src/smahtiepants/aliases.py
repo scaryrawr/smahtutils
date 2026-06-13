@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from .cache import cache_paths, read_cache_manifest
-from .models import CacheManifestDocset, DocsetSummary
+from .models import CacheManifest, CacheManifestDocset, DocsetSummary
 
 CURATED_DOCSET_ALIASES = {
     "node.js": "node",
@@ -52,10 +52,12 @@ def find_docset_by_identifier(
     return None
 
 
-def resolve_installed_docset_slug(cache_root: str | Path, identifier: str) -> str | None:
+def resolve_installed_docset_slug(
+    cache_root: str | Path, identifier: str, manifest: CacheManifest | None = None
+) -> str | None:
     """Resolve an installed docset identifier to its canonical cache slug."""
     normalized = normalize_docset_identifier(identifier)
-    manifest = read_cache_manifest(cache_root)
+    manifest = manifest or read_cache_manifest(cache_root)
     exact = {
         normalize_docset_identifier(slug): slug
         for slug in manifest.docs
@@ -71,7 +73,7 @@ def resolve_installed_docset_slug(cache_root: str | Path, identifier: str) -> st
     if alias_matches:
         return preferred_cache_docset(alias_matches).slug
     fallback_slug = CURATED_DOCSET_ALIASES.get(normalized)
-    if fallback_slug in manifest.docs:
+    if fallback_slug and fallback_slug in manifest.docs:
         return fallback_slug
     metadata_matches = [
         docset
@@ -85,12 +87,15 @@ def resolve_installed_docset_slug(cache_root: str | Path, identifier: str) -> st
 
 
 def resolve_installed_docset_slugs(
-    cache_root: str | Path, identifiers: list[str] | None
+    cache_root: str | Path,
+    identifiers: list[str] | None,
+    manifest: CacheManifest | None = None,
 ) -> set[str]:
     """Resolve installed docset identifiers, dropping unknown filters."""
+    manifest = manifest or read_cache_manifest(cache_root)
     resolved: set[str] = set()
     for identifier in identifiers or []:
-        slug = resolve_installed_docset_slug(cache_root, identifier)
+        slug = resolve_installed_docset_slug(cache_root, identifier, manifest)
         if slug:
             resolved.add(slug)
     return resolved

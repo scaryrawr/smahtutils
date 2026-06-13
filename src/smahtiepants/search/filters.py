@@ -25,7 +25,7 @@ def resolve_docset_filters(
     if not slug_values and not language_values:
         return None
     manifest = read_cache_manifest(cache_root)
-    resolved = resolve_installed_docset_slugs(cache_root, list(slug_values))
+    resolved = resolve_installed_docset_slugs(cache_root, list(slug_values), manifest)
     for slug, summary in manifest.docs.items():
         if (
             summary.slug.lower() in language_values

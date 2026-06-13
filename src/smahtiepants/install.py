@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .aliases import resolve_installed_docset_slug
 from .cache import (
     acquire_docset_lock,
     assert_safe_path_segment,
@@ -316,8 +317,6 @@ def update_docsets(
 
 def remove_docset(slug: str, cache_root: str) -> RemoveResult:
     """Implement remove docset."""
-    from .aliases import resolve_installed_docset_slug
-
     canonical_slug = resolve_installed_docset_slug(cache_root, slug) or slug
     assert_safe_path_segment(canonical_slug, "docset slug")
     paths = ensure_cache_root(cache_root)
