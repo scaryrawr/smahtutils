@@ -30,8 +30,9 @@ def session_start_context(
                 lines.extend(["", "Prompt-relevant documentation snippets:"])
                 for result in results:
                     lines.append(f"- {result.docset_slug}:{result.page_path} {result.page_title}")
-                    snippet = " ".join(result.text.split())[:500]
+                    snippet = " ".join(result.excerpt.split())[:500]
                     lines.append(f"  {snippet}")
+                    lines.append(f"  Read full page: {result.read_hint}")
         except Exception as exc:
             lines.extend(["", f"Documentation search was unavailable: {exc}"])
     return {"additionalContext": "\n".join(lines)}
