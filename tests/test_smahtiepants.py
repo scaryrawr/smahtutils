@@ -890,8 +890,8 @@ def test_semantic_search_uses_configured_embedding_client(tmp_path: Path) -> Non
         storage.close()
 
 
-def test_search_merges_keyword_hits_with_semantic_results(tmp_path: Path) -> None:
-    """Validate keyword hits can outrank weak semantic matches."""
+def test_search_keeps_semantic_ranking_when_keyword_hits_disagree(tmp_path: Path) -> None:
+    """Validate keyword hits do not outrank stronger semantic matches."""
 
     install_docset(
         "http",
@@ -944,9 +944,10 @@ def test_search_merges_keyword_hits_with_semantic_results(tmp_path: Path) -> Non
         client=FakeEmbeddingClient(),
     )
 
-    assert results[0].docset_slug == "css"
-    assert results[0].match_kind == "hybrid"
-    assert any(result.docset_slug == "http" for result in results)
+    assert results[0].docset_slug == "http"
+    assert results[0].match_kind == "semantic"
+    css_result = next(result for result in results if result.docset_slug == "css")
+    assert css_result.match_kind == "hybrid"
 
 
 def test_smahtiepants_annoy_index_rebuilds_when_embeddings_change(tmp_path: Path) -> None:

@@ -102,7 +102,7 @@ def search_docs(
 def merge_search_results(
     semantic: list[SearchResult], keyword: list[SearchResult], limit: int
 ) -> list[SearchResult]:
-    """Merge semantic and keyword results, preserving one result per chunk."""
+    """Merge keyword metadata into semantic ranking, preserving one result per chunk."""
 
     merged: dict[tuple[str, str, int], SearchResult] = {}
     for result in semantic:
@@ -115,17 +115,9 @@ def merge_search_results(
         else:
             merged[key] = replace(
                 existing,
-                score=max(existing.score, result.score),
                 match_kind="hybrid",
             )
-    return sorted(merged.values(), key=result_sort_key, reverse=True)[:limit]
-
-
-def result_sort_key(result: SearchResult) -> tuple[float, int]:
-    """Return ranking key that favors lexical matches on score ties."""
-
-    match_priority = {"semantic": 0, "keyword": 1, "hybrid": 2}.get(result.match_kind, 0)
-    return (result.score, match_priority)
+    return list(merged.values())[:limit]
 
 
 def result_key(result: SearchResult) -> tuple[str, str, int]:
