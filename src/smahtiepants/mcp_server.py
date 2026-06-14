@@ -71,7 +71,16 @@ def tool_text(
             cache_root, query, config, slugs=slugs, languages=languages, limit=limit
         )
         return "\n\n".join(
-            f"{result.docset_slug}:{result.page_id}\n{result.text}" for result in results
+            "\n".join(
+                [
+                    f"{result.docset_slug}:{result.page_id} {result.page_title}",
+                    f"Match: {result.match_kind} score {result.score:.3f}",
+                    f"Read full page: {result.read_hint}",
+                    "Excerpt:",
+                    result.excerpt,
+                ]
+            )
+            for result in results
         )
     if name == "get_page_content":
         slug = str(arguments.get("slug") or "")

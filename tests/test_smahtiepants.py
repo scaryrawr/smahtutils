@@ -34,8 +34,17 @@ from smahtiepants.embeddings.openai import EmbeddingBatchLimits, embedding_batch
 from smahtiepants.embeddings.storage import open_embedding_storage
 from smahtiepants.http import HttpClient
 from smahtiepants.install import install_docset, remove_docset, update_docsets
+from smahtiepants.mcp_server import handle_mcp_request
 from smahtiepants.search import search_docs
 from smahtiepants.search.filters import resolve_docset_filters
+from smahtiepants.search.index import (
+    SEMANTIC_CANDIDATE_COUNT,
+    SearchResult,
+    build_result_excerpt,
+    diversify_search_results,
+    results_to_json,
+    results_to_text,
+)
 from smahtiepants.search.terms import parse_keyword_terms
 from smahtiepants.server_shared import get_page_content, list_pages
 from smahtiepants.text import extract_html_section, normalize_link_href, render_markdown
@@ -174,6 +183,33 @@ class PythonFakeHttp(HttpClient):
         return DownloadedFile(
             path=str(target), bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
         )
+
+
+def make_search_result(
+    page_id: str,
+    ordinal: int = 0,
+    score: float = 1.0,
+    match_kind: str = "semantic",
+) -> SearchResult:
+    """Build a search result for ranking helper tests."""
+
+    return SearchResult(
+        score=score,
+        match_kind=match_kind,
+        docset_slug="python",
+        docset_name="Python",
+        page_id=page_id,
+        page_title=page_id,
+        page_path=page_id,
+        page_type=None,
+        page_file=f"{page_id}.md",
+        chunk_ordinal=ordinal,
+        text="text",
+        excerpt="text",
+        resource_uri=f"smahtiepants://docsets/python/pages/{page_id}",
+        read_hint=f'Read full page with get_page_content slug="python" pageId="{page_id}"',
+        metadata={},
+    )
 
 
 def test_smahtiepants_config_parses_and_redacts_secrets() -> None:
@@ -792,10 +828,157 @@ def test_keyword_search_sanitizes_fts_query_terms(tmp_path: Path) -> None:
     assert results[0].docset_slug == "http"
 
 
+def test_search_output_prefers_query_aware_excerpt_and_read_hint(tmp_path: Path) -> None:
+    """Validate search output surfaces relevant chunk text and full-page hints."""
+
+    config = SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None)
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=config,
+    )
+    from smahtiepants.cache import read_docset_manifest
+    from smahtiepants.embeddings.chunks import chunk_markdown_pages
+
+    docset = read_docset_manifest(tmp_path, "http")
+    assert docset is not None
+    page = tmp_path / "docs" / "http" / docset.pages[0].file
+    filler = "\n".join(f"Filler line {index}." for index in range(16))
+    page.write_text(
+        f"# Headers\n\n{filler}\nThe needle line explains request header metadata.\nTrailing line.",
+        encoding="utf-8",
+    )
+    chunked = chunk_markdown_pages(docset, tmp_path)
+    storage = open_embedding_storage(tmp_path)
+    try:
+        storage.replace_docset_chunks(chunked.docset, chunked.chunks, None, None)
+    finally:
+        storage.close()
+
+    results = search_docs(tmp_path, "needle metadata", config)
+    text_output = results_to_text(results)
+    json_output = json.loads(results_to_json(results))
+    mcp_response = handle_mcp_request(
+        tmp_path,
+        config,
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "search_docs",
+                "arguments": {"query": "needle metadata"},
+            },
+        },
+    )
+
+    assert "needle line" not in "\n".join(results[0].text.splitlines()[:12])
+    assert "needle line" in results[0].excerpt
+    assert "needle line" in text_output
+    assert "Read full page:" in text_output
+    assert json_output["matches"][0]["excerpt"] == results[0].excerpt
+    assert json_output["matches"][0]["resourceUri"] == (
+        f"smahtiepants://docsets/http/pages/{results[0].page_id}"
+    )
+    assert "get_page_content" in json_output["matches"][0]["readHint"]
+    mcp_text = mcp_response["result"]["content"][0]["text"]
+    assert "needle line" in mcp_text
+    assert "Read full page:" in mcp_text
+    assert "get_page_content" in mcp_text
+
+
+def test_search_excerpt_scores_distinct_query_terms_and_keeps_method_context() -> None:
+    """Validate excerpts prefer add/list intent over repeated partial term matches."""
+
+    excerpt = build_result_excerpt(
+        """
+list.append(_value_, _/_)
+
+Add an item to the end of the list.
+
+list.pop(_index=-1_, _/_)
+
+Remove the item at the given position in the list, and return it. If no index is specified, `a.pop()` removes and returns the last item in the list. It raises an error if the list is empty.
+""",
+        ["add", "items", "list"],
+    )
+
+    assert "list.append" in excerpt
+    assert "Add an item" in excerpt
+    assert "list.pop" not in excerpt
+
+
+def test_search_excerpt_trims_long_lines_around_matched_terms() -> None:
+    """Validate long excerpt lines preserve matched terms when trimmed."""
+
+    excerpt = build_result_excerpt(
+        "prefix " * 300 + "list.append adds an item to the end of the list",
+        ["append"],
+        max_chars=120,
+    )
+
+    assert "append" in excerpt
+    assert len(excerpt) <= 120
+
+
 def test_keyword_terms_ignore_common_stopwords() -> None:
     """Validate keyword terms skip trivial query words."""
 
     assert parse_keyword_terms("sorting a list") == ["sorting", "list"]
+    assert parse_keyword_terms("how do I add items to a list") == ["add", "items", "list"]
+    assert parse_keyword_terms("c++ arrays") == ["c", "arrays"]
+
+
+def test_semantic_candidate_count_is_stable_across_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate semantic retrieval depth does not depend on visible result limits."""
+
+    calls: list[int] = []
+
+    class FakeAnnoyIndexManager:
+        """Represent FakeAnnoyIndexManager."""
+
+        def __init__(self, *_args) -> None:
+            """Implement init."""
+
+        def search(self, _model, _query_vector, n):
+            """Implement search."""
+            calls.append(n)
+            return []
+
+    class FakeEmbeddingClient:
+        """Represent FakeEmbeddingClient."""
+
+        def create_embeddings(self, _input):
+            """Implement create embeddings."""
+            return [[1.0, 0.0]]
+
+    monkeypatch.setattr("smahtiepants.search.index.AnnoyIndexManager", FakeAnnoyIndexManager)
+    config = SmahtiepantsConfig(
+        embeddings=EmbeddingsConfig(enabled=True),
+        openai=OpenAiConfig(embedding_model="embed"),
+    )
+
+    search_docs(tmp_path, "add items to a list", config, limit=10, client=FakeEmbeddingClient())
+    search_docs(tmp_path, "add items to a list", config, limit=50, client=FakeEmbeddingClient())
+
+    assert calls == [SEMANTIC_CANDIDATE_COUNT, SEMANTIC_CANDIDATE_COUNT]
+
+
+def test_search_result_diversity_prefers_pages_before_repeated_chunks() -> None:
+    """Validate visible search results prefer one strong result per page before repeats."""
+
+    results = [
+        make_search_result(page_id="page-one", ordinal=0, score=0.9),
+        make_search_result(page_id="page-one", ordinal=1, score=0.8),
+        make_search_result(page_id="page-two", ordinal=0, score=0.7),
+    ]
+
+    diversified = diversify_search_results(results, 2)
+
+    assert [result.page_id for result in diversified] == ["page-one", "page-two"]
 
 
 def test_search_with_unknown_slug_returns_no_results(tmp_path: Path) -> None:
