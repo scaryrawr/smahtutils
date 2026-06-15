@@ -59,13 +59,14 @@ are diversified so you see one strong hit per page before repeats.
 
 ### Output fields
 
-Each match includes:
+`--format json` emits `{"matches": [...]}` with **camelCase** keys. Each match
+includes:
 
-- `score` and `match_kind` (`semantic`, `keyword`, or `hybrid`).
-- `docset_slug`, `docset_name`, `page_id`, `page_title`, `page_path`.
+- `score` and `matchKind` (`semantic`, `keyword`, or `hybrid`).
+- `docsetSlug`, `docsetName`, `pageId`, `pageTitle`, `pagePath`, `pageType`.
 - `excerpt` — a compact, query-aware snippet (what `text` format prints).
 - `text` — the full stored chunk (only fully visible via `--format json`).
-- `read_hint` and `resource_uri` — how to fetch the entire page.
+- `readHint` and `resourceUri` — how to fetch the entire page.
 
 Use `--format json` when an excerpt is too short; its `text` field holds the
 whole chunk.
