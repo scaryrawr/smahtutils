@@ -1,0 +1,15 @@
+[
+  {"query": "How do I read a route parameter in Express?", "should_trigger": true},
+  {"query": "What's the current CSS syntax for styling based on a container's size?", "should_trigger": true},
+  {"query": "Is there a built-in deep clone in JavaScript now? Make sure it's up to date.", "should_trigger": true},
+  {"query": "How do I write a multi-stage Dockerfile?", "should_trigger": true},
+  {"query": "What does the Go context package do and how do I cancel a context?", "should_trigger": true},
+  {"query": "Has the recommended way to manage Python virtual environments changed recently?", "should_trigger": true},
+  {"query": "What git command undoes the last commit but keeps my changes staged?", "should_trigger": true},
+  {"query": "Look up the current options for the useEffect hook in React.", "should_trigger": true},
+  {"query": "Write a haiku about the ocean.", "should_trigger": false},
+  {"query": "Refactor this function in my repo to remove the nested loop.", "should_trigger": false},
+  {"query": "What's the capital of France?", "should_trigger": false},
+  {"query": "Summarize the meeting notes in this file.", "should_trigger": false},
+  {"query": "Rename the variable x to count throughout this module.", "should_trigger": false}
+]

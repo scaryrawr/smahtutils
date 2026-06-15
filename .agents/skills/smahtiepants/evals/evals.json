@@ -1,0 +1,57 @@
+{
+  "skill_name": "smahtiepants",
+  "evals": [
+    {
+      "id": 1,
+      "name": "express-route-params",
+      "prompt": "In Express, how do I read a URL route parameter and a query-string value inside a request handler? Give me a minimal, correct example.",
+      "expected_output": "An accurate Express example using req.params and req.query, grounded in the locally installed Express documentation rather than answered purely from memory.",
+      "files": [],
+      "expectations": [
+        "The agent ran a smahtiepants command (e.g. `smahtiepants docs installed` or `smahtiepants search ... --slug express`) to consult local documentation",
+        "The agent scoped the search to the Express docset (via --slug or --language) rather than a broad unscoped search",
+        "The final answer correctly uses req.params for route parameters and req.query for query-string values",
+        "The answer references that it was grounded in the local Express documentation"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "css-container-queries",
+      "prompt": "What is the modern CSS way to apply styles based on the size of a parent element rather than the viewport? I want the current syntax.",
+      "expected_output": "An explanation of CSS container queries (container-type / @container) verified against the locally installed CSS docset, acknowledging this is current syntax.",
+      "files": [],
+      "expectations": [
+        "The agent used smahtiepants to search the local CSS documentation instead of answering only from memory",
+        "The search was scoped to the css docset",
+        "The answer describes container queries using container-type and the @container at-rule",
+        "The agent grounded the answer in the local docs and did not rely solely on its training data"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "unknown-library-discovery",
+      "prompt": "How do I configure a multi-stage build in Docker to produce a smaller final image?",
+      "expected_output": "Correct guidance on Docker multi-stage builds, after the agent checks which docsets are installed and searches the Docker docs locally.",
+      "files": [],
+      "expectations": [
+        "The agent listed installed docsets (`smahtiepants docs installed`) or searched to confirm a Docker docset is available before answering",
+        "The agent searched the local Docker documentation with a scoped query",
+        "The answer explains multi-stage builds using multiple FROM stages and COPY --from to keep the final image small",
+        "The answer is grounded in the local documentation rather than memory alone"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "stale-knowledge-check",
+      "prompt": "I think JavaScript got a built-in way to deep-clone objects without JSON round-tripping. Is that real, what is it called, and what are its limitations? Make sure your answer is current.",
+      "expected_output": "Confirmation of structuredClone with its limitations, verified against the local JavaScript/Web APIs docs because the user asked for current information.",
+      "files": [],
+      "expectations": [
+        "The agent recognized its memory might be stale and used smahtiepants to verify against local documentation",
+        "The agent searched a relevant docset (javascript or dom/Web APIs) with a scoped query",
+        "The answer identifies structuredClone and notes real limitations (e.g. cannot clone functions, DOM nodes, or certain object types)",
+        "The answer is grounded in the local docs and the agent did not answer purely from memory"
+      ]
+    }
+  ]
+}
