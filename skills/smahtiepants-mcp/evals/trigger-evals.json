@@ -1,0 +1,15 @@
+[
+  {"query": "Use the local MCP docs to check how Express exposes route params.", "should_trigger": true},
+  {"query": "What's the current CSS syntax for styling based on a container's size?", "should_trigger": true},
+  {"query": "Before answering, look up the React useEffect cleanup behavior in the connected docs server.", "should_trigger": true},
+  {"query": "What are the current Python pathlib methods for walking directories?", "should_trigger": true},
+  {"query": "Check the Docker docs for the modern multi-stage build syntax.", "should_trigger": true},
+  {"query": "Is structuredClone still the built-in way to deep clone in JavaScript? Verify with docs.", "should_trigger": true},
+  {"query": "Use the smahtiepants MCP server to answer this Git flag question.", "should_trigger": true},
+  {"query": "How do I call get_page_content after search_docs returns a pageId?", "should_trigger": true},
+  {"query": "Write a haiku about the ocean.", "should_trigger": false},
+  {"query": "Refactor this function in my repo to remove the nested loop.", "should_trigger": false},
+  {"query": "What's the capital of France?", "should_trigger": false},
+  {"query": "Summarize the meeting notes in this file.", "should_trigger": false},
+  {"query": "Rename the variable x to count throughout this module.", "should_trigger": false}
+]

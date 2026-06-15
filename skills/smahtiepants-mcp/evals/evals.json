@@ -1,0 +1,57 @@
+{
+  "skill_name": "smahtiepants-mcp",
+  "evals": [
+    {
+      "id": 1,
+      "name": "express-route-params-mcp",
+      "prompt": "In Express, how do I read a URL route parameter and a query-string value inside a request handler? Give me a minimal, correct example.",
+      "expected_output": "An accurate Express example using req.params and req.query, grounded in the locally installed Express documentation via the smahtiepants MCP tools rather than answered from memory or by shelling out to the CLI.",
+      "files": [],
+      "expectations": [
+        "The agent used smahtiepants MCP tools such as list_docsets or search_docs instead of relying only on memory",
+        "The agent scoped search_docs to the Express docset with slugs or languages",
+        "The final answer correctly uses req.params for route parameters and req.query for query-string values",
+        "The answer references that it was grounded in the local Express documentation"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "css-container-queries-mcp",
+      "prompt": "What is the modern CSS way to apply styles based on the size of a parent element rather than the viewport? I want the current syntax.",
+      "expected_output": "An explanation of CSS container queries verified through the smahtiepants MCP search_docs tool, including current container-type and @container syntax.",
+      "files": [],
+      "expectations": [
+        "The agent used search_docs through the MCP server to consult local CSS documentation",
+        "The search was scoped to the css docset",
+        "The answer describes container queries using container-type and the @container at-rule",
+        "The agent grounded the answer in local docs and did not answer purely from memory"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "full-page-follow-up-mcp",
+      "prompt": "For React useEffect, explain when a cleanup function runs. Make sure you have enough detail to avoid an outdated answer.",
+      "expected_output": "A current explanation of React useEffect cleanup behavior using smahtiepants MCP search results and, when the excerpt is insufficient, get_page_content for the matched page.",
+      "files": [],
+      "expectations": [
+        "The agent used search_docs with a React-scoped query",
+        "The agent used get_page_content if the search excerpt did not contain enough detail",
+        "The answer correctly explains that cleanup runs before the effect re-runs with changed dependencies and when the component unmounts",
+        "The answer names the local React docs page or docset used"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "missing-docset-mcp",
+      "prompt": "Check the current Frobnicator.js v9 docs and tell me the supported cache modes.",
+      "expected_output": "The agent checks installed docsets with smahtiepants MCP and clearly states when no relevant local docset is installed instead of inventing current Frobnicator.js behavior.",
+      "files": [],
+      "expectations": [
+        "The agent used list_docsets or search_docs through MCP to check local documentation availability",
+        "The agent did not hallucinate unsupported details for an unavailable or fictional docset",
+        "The answer clearly states that the local smahtiepants mirror cannot verify Frobnicator.js v9 docs if no docset is installed",
+        "The answer avoids claiming local documentation support that was not found"
+      ]
+    }
+  ]
+}
