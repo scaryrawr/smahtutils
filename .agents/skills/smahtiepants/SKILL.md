@@ -5,35 +5,12 @@ description: Use this skill before answering questions or writing code that depe
 
 # smahtiepants: search current local documentation
 
-## Why this exists
-
-Your built-in knowledge has a training cutoff. Library, framework, and language
-APIs change after that date: signatures change, options get renamed, features
-are added or deprecated, and "best practice" advice goes stale. Answering from
-memory alone risks giving outdated or wrong information with full confidence.
-
-`smahtiepants` keeps a **local, recently-mirrored copy of DevDocs** (hundreds of
-docsets for languages, libraries, and tools) and supports fast semantic +
-keyword search over it. Before you answer from memory, check whether current
-documentation is available locally and ground your answer in it.
-
-Assume the `smahtiepants` command is installed and on `PATH`.
-
-## When to use this skill
-
-Reach for `smahtiepants` whenever:
-
-- You are about to explain or use a library/framework/language/runtime/CLI API
-  (function names, signatures, options, flags, defaults, return shapes).
-- You are unsure whether something is **still current** or has changed.
-- The user asks "how do I do X in `<library>`", "what does `<thing>` do", or
-  "what's the right/modern way to …".
-- You would otherwise answer from memory about a fast-moving ecosystem
-  (JS/TS/Node, CSS/Web APIs, Python, Rust, Go, Docker, Git, build tools, etc.).
-- You hit an error or unexpected behavior tied to a specific tool/version.
-
-If the answer is purely conceptual and version-independent, or no relevant
-docset exists locally, you can skip the search — but prefer checking first.
+Your training data has a cutoff; library/framework/language APIs change after it.
+**Before answering from memory, search the local docs and ground your answer in
+them.** `smahtiepants` keeps a recently-mirrored copy of DevDocs (hundreds of
+docsets) with fast semantic + keyword search. Assume it is installed and on
+`PATH`. Skip only when the question is conceptual/version-independent or no
+relevant docset exists.
 
 ## Workflow
 
