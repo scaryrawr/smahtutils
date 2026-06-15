@@ -56,6 +56,92 @@ def handle_mcp_request(
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": str(exc)}}
 
 
+def make_fastmcp_server(
+    cache_root: str | Path,
+    config: SmahtiepantsConfig,
+    host: str,
+    port: int,
+):
+    """Create the official Streamable HTTP MCP server for smahtiepants."""
+
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError as exc:  # pragma: no cover - dependency is required by pyproject
+        raise RuntimeError("official `mcp` package is required to run the MCP server") from exc
+
+    server = FastMCP(
+        "smahtiepants",
+        host=host,
+        port=port,
+        streamable_http_path="/mcp",
+        json_response=True,
+        stateless_http=True,
+        log_level="WARNING",
+    )
+
+    @server.tool(
+        name="list_docsets",
+        description="List installed DevDocs docsets.",
+        structured_output=False,
+    )
+    def _list_docsets() -> str:
+        return tool_text(cache_root, config, "list_docsets", {})
+
+    @server.tool(
+        name="search_docs",
+        description="Search installed documentation.",
+        structured_output=False,
+    )
+    def _search_docs(
+        query: str,
+        slugs: list[str] | None = None,
+        languages: list[str] | None = None,
+        limit: int = 10,
+    ) -> str:
+        return tool_text(
+            cache_root,
+            config,
+            "search_docs",
+            {"query": query, "slugs": slugs, "languages": languages, "limit": limit},
+        )
+
+    @server.tool(
+        name="get_page_content",
+        description="Read Markdown content for an installed page.",
+        structured_output=False,
+    )
+    def _get_page_content(
+        slug: str,
+        pageId: str = "",
+        page_id: str = "",
+        startLine: int | None = None,
+        endLine: int | None = None,
+    ) -> str:
+        return tool_text(
+            cache_root,
+            config,
+            "get_page_content",
+            {
+                "slug": slug,
+                "pageId": pageId,
+                "page_id": page_id,
+                "startLine": startLine,
+                "endLine": endLine,
+            },
+        )
+
+    @server.resource(
+        "smahtiepants://docsets/{slug}/pages/{pageId}",
+        name="page_content",
+        description="Read Markdown content for an installed DevDocs page.",
+        mime_type="text/markdown",
+    )
+    def _page_content_resource(slug: str, pageId: str) -> str:
+        return get_page_content(cache_root, slug, pageId).content
+
+    return server
+
+
 def tool_text(
     cache_root: str | Path, config: SmahtiepantsConfig, name: str, arguments: dict[str, object]
 ) -> str:

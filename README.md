@@ -73,6 +73,10 @@ uv run smahtiepants search "request headers" --slug http
 uv run smahtiepants serve --host 127.0.0.1 --port 43877
 ```
 
+When adding `smahtiepants` as an HTTP MCP server, use
+`http://127.0.0.1:43877/mcp`. The local server does not serve TLS, so
+`https://127.0.0.1:43877/mcp` will fail before the MCP handshake starts.
+
 Run `wickedpaste` against explicit settings:
 
 ```bash
@@ -104,7 +108,7 @@ Use `--root <path>` to serve or query a different local coding directory.
 
 `smahtiepants` stores its cache under `SMAHTIEPANTS_CACHE_DIR`, `$XDG_CACHE_HOME/smahtiepants`, or `~/.cache/smahtiepants`. On first use, an existing default `ddserve` cache directory is renamed to `smahtiepants` when the new cache directory does not already exist. Configuration is read from shared `$HOME/.wickedsmaht/config.json`; `--config` may point at an alternate shared config file. Documentation embeddings use `base_url` and `text_embedding_model`, never `coding_embedding_model`. App-specific settings live under the optional `smahtiepants` object; a legacy `ddserve` object is rewritten to `smahtiepants` when no `smahtiepants` object is present.
 
-The Python app supports the core runtime/server surface from the original TypeScript app: DevDocs source listing, install/update/remove, Markdown page extraction, embedding refresh/rebuild/status, Annoy-accelerated semantic search with keyword fallback, a read-only REST API, a minimal MCP HTTP endpoint, and a Copilot `sessionStart` hook endpoint. Repo-level Copilot plugin manifests are intentionally not installed into this repository so they do not conflict with the existing `smahties` MCP configuration.
+The Python app supports the core runtime/server surface from the original TypeScript app: DevDocs source listing, install/update/remove, Markdown page extraction, embedding refresh/rebuild/status, Annoy-accelerated semantic search with keyword fallback, a read-only REST API, a Streamable HTTP MCP endpoint, and a Copilot `sessionStart` hook endpoint. Repo-level Copilot plugin manifests are intentionally not installed into this repository so they do not conflict with the existing `smahties` MCP configuration.
 
 DevDocs aliases, common shorthands, and language-like docset names/types resolve to canonical cached docsets where possible, so inputs such as `js`, `ts`, `py`, `python`, `c++`, and `nodejs` can be used with install, update, remove, search filters, page reads, and embedding commands without creating duplicate cache entries.
 

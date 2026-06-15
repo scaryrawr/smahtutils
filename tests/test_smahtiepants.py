@@ -10,9 +10,11 @@ import pytest
 from smahtiepants.cache import migrate_legacy_cache_root, read_cache_manifest, resolve_cache_root
 from smahtiepants.cli import run_cli
 from smahtiepants.config import (
-    SmahtiepantsConfig,
     EmbeddingsConfig,
     OpenAiConfig,
+    ServeAuthConfig,
+    ServeConfig,
+    SmahtiepantsConfig,
     load_config,
     redact_config,
 )
@@ -46,6 +48,7 @@ from smahtiepants.search.index import (
     results_to_text,
 )
 from smahtiepants.search.terms import parse_keyword_terms
+from smahtiepants.server import make_app
 from smahtiepants.server_shared import get_page_content, list_pages
 from smahtiepants.text import extract_html_section, normalize_link_href, render_markdown
 
@@ -886,6 +889,96 @@ def test_search_output_prefers_query_aware_excerpt_and_read_hint(tmp_path: Path)
     assert "needle line" in mcp_text
     assert "Read full page:" in mcp_text
     assert "get_page_content" in mcp_text
+
+
+@pytest.mark.filterwarnings("ignore:Using `httpx` with `starlette.testclient` is deprecated")
+def test_streamable_http_mcp_endpoint_lists_tools_and_allows_local_cors(
+    tmp_path: Path,
+) -> None:
+    """Validate the HTTP server exposes the official Streamable HTTP MCP transport."""
+
+    from starlette.testclient import TestClient
+
+    config = SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False), openai=None)
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=config,
+    )
+    app = make_app(tmp_path, config, "127.0.0.1", 43877)
+    headers = {"accept": "application/json, text/event-stream"}
+
+    with TestClient(app, base_url="http://127.0.0.1:43877") as client:
+        preflight = client.options(
+            "/mcp",
+            headers={
+                "origin": "http://localhost:1234",
+                "access-control-request-method": "POST",
+                "access-control-request-headers": "content-type",
+            },
+        )
+        initialize = client.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pytest", "version": "1.0"},
+                },
+            },
+            headers={**headers, "origin": "http://localhost:1234"},
+        )
+        tools = client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            headers=headers,
+        )
+        docsets = client.get("/api/docsets")
+
+    assert preflight.status_code == 204
+    assert preflight.headers["access-control-allow-origin"] == "http://localhost:1234"
+    assert "mcp-session-id" in preflight.headers["access-control-allow-headers"]
+    assert initialize.status_code == 200
+    assert initialize.json()["result"]["serverInfo"]["name"] == "smahtiepants"
+    assert tools.status_code == 200
+    tool_names = {tool["name"] for tool in tools.json()["result"]["tools"]}
+    assert {"list_docsets", "search_docs", "get_page_content"} <= tool_names
+    assert docsets.status_code == 200
+    assert docsets.json()["items"][0]["slug"] == "http"
+
+
+@pytest.mark.filterwarnings("ignore:Using `httpx` with `starlette.testclient` is deprecated")
+def test_streamable_http_mcp_endpoint_respects_bearer_auth(tmp_path: Path) -> None:
+    """Validate configured server auth protects the MCP HTTP endpoint."""
+
+    from starlette.testclient import TestClient
+
+    config = SmahtiepantsConfig(
+        embeddings=EmbeddingsConfig(enabled=False),
+        openai=None,
+        serve=ServeConfig(auth=ServeAuthConfig(token="secret")),
+    )
+    app = make_app(tmp_path, config, "127.0.0.1", 43877)
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+    }
+    headers = {"accept": "application/json, text/event-stream"}
+
+    with TestClient(app, base_url="http://127.0.0.1:43877") as client:
+        unauthorized = client.post("/mcp", json=request, headers=headers)
+        authorized = client.post(
+            "/mcp", json=request, headers={**headers, "authorization": "Bearer secret"}
+        )
+
+    assert unauthorized.status_code == 401
+    assert authorized.status_code == 200
+    assert "tools" in authorized.json()["result"]
 
 
 def test_search_excerpt_scores_distinct_query_terms_and_keeps_method_context() -> None:
