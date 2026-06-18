@@ -28,6 +28,8 @@ Run from the repository root.
 
 Use Ruff formatting defaults. Prefer stdlib modules before adding dependencies. Keep CLI/API-facing dataclasses clear and serializable. Preserve `wickedpaste` clipboard precedence (image before text) unless explicitly changing product behavior. Keep shared config defaults/resolution in `wickedsmaht_config`.
 
+Keep README files consumer-focused. The root `README.md` should stay a concise entry point that links to package READMEs under `src/*/README.md`; package READMEs should prioritize usage, configuration, commands, behavior, and safety notes. Put contributor setup, validation, and deeper design/architecture details in `CONTRIBUTING.md` and `docs/architecture.md` instead of expanding the root README.
+
 For `smahtiepants`, keep generated DevDocs cache content outside the repository under the configured cache root. Prefer shared `wickedsmaht_config` settings using `base_url`, `text_embedding_model`, and optional nested `smahtiepants` settings; legacy `ddserve` settings/default cache directories should migrate to the new names instead of remaining the primary path. Never use `coding_embedding_model` for documentation search. Do not copy or merge repo-level Copilot plugin manifests/skills unless explicitly requested; this repo's root `.mcp.json` belongs to `smahties`. Runtime `smahtiepants` MCP and hook endpoints may still live in `src/smahtiepants`.
 
 For `smahtiepants serve`, keep `/mcp` backed by the official `mcp` SDK Streamable HTTP transport rather than a hand-rolled JSON-RPC route; preserve the existing read-only REST and Copilot hook routes alongside it. The local server is plain HTTP (`http://127.0.0.1:43877/mcp`), not HTTPS.
