@@ -12,10 +12,15 @@ from smahtiepants.models import to_jsonable
 
 from smahtiepants.embeddings.openai import EmbeddingClient, create_openai_embedding_client
 from smahtiepants.embeddings.annoy_index import AnnoyIndexManager
-from smahtiepants.embeddings.storage import SearchChunk, cosine_similarity, open_embedding_storage
+from smahtiepants.embeddings.storage import (
+    EmbeddingStorage,
+    SearchChunk,
+    cosine_similarity,
+    open_embedding_storage,
+)
 
 from .filters import resolve_docset_filters
-from .terms import parse_keyword_terms
+from .terms import parse_keyword_terms, term_variants
 
 SEMANTIC_CANDIDATE_COUNT = 1000
 SEMANTIC_RESULT_POOL = 250
@@ -64,31 +69,27 @@ def search_docs(
     try:
         semantic: list[SearchResult] = []
         terms = parse_keyword_terms(query)
+        keyword_limit = KEYWORD_RESULT_POOL
+        keyword_chunks = storage.keyword_chunks(terms, resolved_slugs, keyword_limit)
+        keyword_ids = {chunk.id for chunk in keyword_chunks}
         if config.openai is not None and config.embeddings.enabled:
             embedding_client = client or create_openai_embedding_client(config, env)
             query_vector = embedding_client.create_embeddings(query)[0]
-            manager = AnnoyIndexManager(cache_root, storage)
-            candidate_ids = manager.search(
-                config.openai.embedding_model, query_vector, SEMANTIC_CANDIDATE_COUNT
+            chunks = semantic_candidate_chunks(
+                cache_root,
+                storage,
+                config.openai.embedding_model,
+                query_vector,
+                resolved_slugs,
+                keyword_chunks,
             )
-            chunks = storage.chunks_by_ids(
-                candidate_ids, config.openai.embedding_model, resolved_slugs
-            )
-            if len(chunks) < SEMANTIC_RESULT_POOL and resolved_slugs:
-                scoped_fill = storage.chunks_with_vectors(
-                    config.openai.embedding_model,
-                    resolved_slugs,
-                    SEMANTIC_CANDIDATE_COUNT,
-                )
-                known_ids = {chunk.id for chunk in chunks}
-                chunks.extend(chunk for chunk in scoped_fill if chunk.id not in known_ids)
             semantic = diversify_search_results(
                 sorted(
                     (
                         chunk_to_result(
                             chunk,
                             cosine_similarity(query_vector, chunk.vector or []),
-                            "semantic",
+                            "hybrid" if chunk.id in keyword_ids else "semantic",
                             terms,
                         )
                         for chunk in chunks
@@ -98,7 +99,6 @@ def search_docs(
                 ),
                 SEMANTIC_RESULT_POOL,
             )
-        keyword_limit = KEYWORD_RESULT_POOL
         keyword = [
             chunk_to_result(
                 chunk,
@@ -106,9 +106,7 @@ def search_docs(
                 "keyword",
                 terms,
             )
-            for index, chunk in enumerate(
-                storage.keyword_chunks(terms, resolved_slugs, keyword_limit)
-            )
+            for index, chunk in enumerate(keyword_chunks)
         ]
         if semantic and keyword:
             return merge_search_results(semantic, keyword, bounded_limit)
@@ -117,6 +115,42 @@ def search_docs(
         return diversify_search_results(keyword, bounded_limit)
     finally:
         storage.close()
+
+
+def semantic_candidate_chunks(
+    cache_root: str | Path,
+    storage: EmbeddingStorage,
+    model: str,
+    query_vector: list[float],
+    resolved_slugs: set[str] | None,
+    keyword_chunks: list[SearchChunk],
+) -> list[SearchChunk]:
+    """Return exact-scoreable semantic candidates for the requested search scope."""
+
+    if resolved_slugs is not None:
+        return storage.chunks_with_vectors(model, resolved_slugs, None)
+    manager = AnnoyIndexManager(cache_root, storage)
+    candidate_ids = manager.search(model, query_vector, SEMANTIC_CANDIDATE_COUNT)
+    chunks = storage.chunks_by_ids(candidate_ids, model, None)
+    if keyword_chunks:
+        keyword_vector_chunks = storage.chunks_by_ids(
+            (chunk.id for chunk in keyword_chunks), model, None
+        )
+        chunks = merge_search_chunks(chunks, keyword_vector_chunks)
+    return chunks
+
+
+def merge_search_chunks(primary: list[SearchChunk], extra: list[SearchChunk]) -> list[SearchChunk]:
+    """Append chunks not already present, preserving primary order."""
+
+    seen = {chunk.id for chunk in primary}
+    merged = list(primary)
+    for chunk in extra:
+        if chunk.id in seen:
+            continue
+        merged.append(chunk)
+        seen.add(chunk.id)
+    return merged
 
 
 def merge_search_results(
@@ -262,17 +296,18 @@ def build_result_excerpt(
 ) -> str:
     """Build a compact query-aware excerpt from a stored search chunk."""
 
-    lines = strip_chunk_metadata(text).splitlines()
+    lines, leading_omitted = excerpt_source_lines(strip_chunk_metadata(text), terms)
     if not any(line.strip() for line in lines):
-        lines = text.splitlines()
+        lines, leading_omitted = excerpt_source_lines(text, terms)
     if not lines:
         return ""
     target = best_matching_line(lines, terms)
     start, end = excerpt_bounds(lines, target, max_lines, max_chars)
+    start, end = expand_single_line_context(lines, target, start, end, max_lines, max_chars)
     if start >= 2 and not lines[start - 1].strip() and is_context_label_line(lines[start - 2]):
         start -= 2
     excerpt_lines = lines[start:end]
-    if start > 0:
+    if start > 0 or leading_omitted:
         excerpt_lines.insert(0, "...")
     if end < len(lines):
         excerpt_lines.append("...")
@@ -280,6 +315,71 @@ def build_result_excerpt(
     if len(excerpt) > max_chars:
         return trim_excerpt(excerpt, terms, max_chars)
     return excerpt
+
+
+def excerpt_source_lines(text: str, terms: list[str]) -> tuple[list[str], bool]:
+    """Return normalized excerpt lines and whether leading chunk text was omitted."""
+
+    normalized = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    lines = [line.rstrip() for line in normalized.splitlines()]
+    lines = [line for line in lines if not is_excerpt_noise_line(line)]
+    lines = collapse_blank_lines(lines)
+    leading_omitted = False
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if len(lines) > 1 and is_partial_leading_line(lines[0], terms):
+        lines.pop(0)
+        leading_omitted = True
+        while lines and not lines[0].strip():
+            lines.pop(0)
+    return lines, leading_omitted
+
+
+def collapse_blank_lines(lines: list[str]) -> list[str]:
+    """Collapse repeated blank lines for compact CLI excerpts."""
+
+    output: list[str] = []
+    previous_blank = False
+    for line in lines:
+        blank = not line.strip()
+        if blank and previous_blank:
+            continue
+        output.append("" if blank else line)
+        previous_blank = blank
+    while output and not output[0].strip():
+        output.pop(0)
+    while output and not output[-1].strip():
+        output.pop()
+    return output
+
+
+def is_excerpt_noise_line(line: str) -> bool:
+    """Return whether a generated documentation line is poor excerpt context."""
+
+    stripped = line.strip()
+    return bool(
+        stripped == "[Tests](javascript:void(0))"
+        or stripped == "Tests with this rule:"
+        or stripped.startswith("-   [tests/")
+        or stripped.startswith("- [tests/")
+        or stripped.startswith("> DevDocs path:")
+    )
+
+
+def is_partial_leading_line(line: str, terms: list[str]) -> bool:
+    """Return whether the first chunk line appears to start mid-token or mid-markup."""
+
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if re.match(r"^[A-Za-z0-9_]*\]\(", stripped):
+        return True
+    if stripped == "`" or stripped[0] in ")]},.;:":
+        return True
+    structural_prefixes = ("#", ">", "-", "*", "+", "|", "```", "~~~", "[", "`")
+    if stripped.startswith(structural_prefixes) or re.match(r"^\d+[.)]\s", stripped):
+        return False
+    return bool(stripped[0].islower() and line_term_score(stripped, terms) == 0)
 
 
 def strip_chunk_metadata(text: str) -> str:
@@ -328,17 +428,6 @@ def line_term_score(line: str, terms: list[str]) -> int:
     return score
 
 
-def term_variants(term: str) -> tuple[str, ...]:
-    """Return simple lexical variants for matching query terms in excerpts."""
-
-    variants = [term]
-    if len(term) > 3 and term.endswith("ies"):
-        variants.append(f"{term[:-3]}y")
-    if len(term) > 3 and term.endswith("s"):
-        variants.append(term[:-1])
-    return tuple(dict.fromkeys(variants))
-
-
 def trim_excerpt(excerpt: str, terms: list[str], max_chars: int) -> str:
     """Trim a long excerpt while keeping the best available query-term match."""
 
@@ -355,8 +444,9 @@ def trim_excerpt(excerpt: str, terms: list[str], max_chars: int) -> str:
         return excerpt[: max_chars - 3].rstrip() + "..."
     context_before = min(match_start, max_chars // 3)
     start = max(0, match_start - context_before)
+    start = trim_start_to_boundary(excerpt, start, match_start)
     end = min(len(excerpt), start + max_chars)
-    start = max(0, end - max_chars)
+    end = trim_end_to_boundary(excerpt, start, end)
     prefix = "..." if start > 0 else ""
     suffix = "..." if end < len(excerpt) else ""
     body_budget = max_chars - len(prefix) - len(suffix)
@@ -364,11 +454,95 @@ def trim_excerpt(excerpt: str, terms: list[str], max_chars: int) -> str:
     return f"{prefix}{body}{suffix}"
 
 
+def trim_start_to_boundary(text: str, start: int, match_start: int) -> int:
+    """Move a trim start forward to avoid leading partial words."""
+
+    if start <= 0 or start >= match_start:
+        return start
+    if text[start - 1].isspace() or text[start].isspace():
+        return start
+    for index in range(start, match_start):
+        if text[index].isspace():
+            return index + 1
+    return start
+
+
+def trim_end_to_boundary(text: str, start: int, end: int) -> int:
+    """Move a trim end backward to avoid trailing partial words."""
+
+    if end >= len(text) or end <= start:
+        return end
+    if text[end - 1].isspace() or text[end].isspace():
+        return end
+    minimum = max(start, end - 40)
+    for index in range(end - 1, minimum, -1):
+        if text[index].isspace():
+            return index
+    return end
+
+
 def is_context_label_line(line: str) -> bool:
     """Return whether a nearby short line should be kept as excerpt context."""
 
     stripped = line.strip()
     return bool(stripped and len(stripped) <= 120)
+
+
+def is_markdown_heading(line: str) -> bool:
+    """Return whether a line is a Markdown heading."""
+
+    return bool(re.match(r"^#{1,6}\s+\S", line.strip()))
+
+
+def expand_single_line_context(
+    lines: list[str], target: int, start: int, end: int, max_lines: int, max_chars: int
+) -> tuple[int, int]:
+    """Add the following paragraph for isolated headings or labels."""
+
+    if end - start != 1 or target < start or target >= end:
+        return start, end
+    if not (is_markdown_heading(lines[target]) or is_reference_label_line(lines[target])):
+        return start, end
+    cursor = target + 1
+    while cursor < len(lines) and not lines[cursor].strip():
+        cursor += 1
+    if cursor >= len(lines):
+        return start, end
+    expanded_end = cursor
+    included_plain_text = False
+    while cursor < len(lines):
+        block_end = cursor + 1
+        while block_end < len(lines) and lines[block_end].strip():
+            block_end += 1
+        candidate_end = block_end
+        if (
+            candidate_end - start > max_lines
+            or excerpt_char_count(lines, start, candidate_end) > max_chars
+        ):
+            break
+        expanded_end = candidate_end
+        included_plain_text = included_plain_text or block_has_plain_text(lines[cursor:block_end])
+        if included_plain_text:
+            break
+        cursor = block_end
+        while cursor < len(lines) and not lines[cursor].strip():
+            cursor += 1
+    return start, max(end, expanded_end)
+
+
+def block_has_plain_text(lines: list[str]) -> bool:
+    """Return whether a block has explanatory text beyond headings or fences."""
+
+    return any(
+        stripped and not is_markdown_heading(stripped) and not stripped.startswith(("```", "~~~"))
+        for stripped in (line.strip() for line in lines)
+    )
+
+
+def is_reference_label_line(line: str) -> bool:
+    """Return whether a line is a standalone Markdown reference label."""
+
+    return bool(re.match(r"^\[[^\]]+\]\([^)]+\)$", line.strip()))
 
 
 def excerpt_bounds(

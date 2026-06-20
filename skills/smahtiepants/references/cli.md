@@ -54,8 +54,13 @@ smahtiepants search "<query>" [--slug <slug>]… [--language <name>]… \
 - `--format` selects output (`text` default); `--json` is shorthand for JSON.
 
 Ranking: when embeddings are configured, semantic similarity is the primary
-signal, with keyword matches marked `hybrid` or filling fallback slots. Results
-are diversified so you see one strong hit per page before repeats.
+signal. Scoped searches (`--slug`/`--language`) exact-score candidates inside
+that scope, while keyword matches are marked `hybrid` or fill fallback slots.
+Results are diversified so you see one strong hit per page before repeats.
+
+Queries can be natural language or identifier-heavy. For language/runtime
+reference docs, include exact API names, attributes, flags, config keys, and
+nearby concept words, for example `cfg target_arch target_os target triple`.
 
 ### Output fields
 
@@ -69,7 +74,8 @@ includes:
 - `readHint` and `resourceUri` — how to fetch the entire page.
 
 Use `--format json` when an excerpt is too short; its `text` field holds the
-whole chunk.
+whole chunk. If a result looks close but ambiguous, use `readHint`/`resourceUri`
+to fetch the full page before deciding the docs do not cover the topic.
 
 ## embeddings
 

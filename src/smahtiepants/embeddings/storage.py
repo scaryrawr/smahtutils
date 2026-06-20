@@ -410,7 +410,9 @@ class EmbeddingStorage:
         """Implement keyword chunks."""
         if not terms or (slugs is not None and not slugs):
             return []
-        fts_query = " OR ".join(f"{term}*" for term in terms)
+        from smahtiepants.search.terms import keyword_fts_terms
+
+        fts_query = " OR ".join(f"{term}*" for term in keyword_fts_terms(terms))
         params: list[object] = [fts_query]
         slug_join = ""
         if slugs is not None:
