@@ -37,7 +37,7 @@ Important constraints:
 - Resolve user-facing aliases to canonical DevDocs slugs before touching cache paths.
 - Keep canonical slugs as cache directory names, manifest keys, and embedding docset IDs.
 - Keep `/mcp` backed by the official `mcp` SDK Streamable HTTP transport.
-- Search should exact-score bounded Annoy candidates loaded from SQLite and preserve keyword fallback.
+- Unscoped search should exact-score bounded Annoy candidates loaded from SQLite; scoped docset/language search should exact-score vectors inside the resolved scope. Keyword hits with vectors should join the semantic candidate pool, while keyword-only hits remain fallback results.
 - Search output should include query-aware excerpts and full-page read hints.
 
 ## smahties flow

@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from smahtiepants.cache import migrate_legacy_cache_root, read_cache_manifest, resolve_cache_root
+from smahtiepants.cache import (
+    migrate_legacy_cache_root,
+    read_cache_manifest,
+    resolve_cache_root,
+    write_cache_manifest,
+)
 from smahtiepants.cli import run_cli
 from smahtiepants.config import (
     EmbeddingsConfig,
@@ -37,6 +42,7 @@ from smahtiepants.embeddings.storage import open_embedding_storage
 from smahtiepants.http import HttpClient
 from smahtiepants.install import install_docset, remove_docset, update_docsets
 from smahtiepants.mcp_server import handle_mcp_request
+from smahtiepants.models import CACHE_SCHEMA_VERSION, CacheManifest, CacheManifestDocset
 from smahtiepants.search import search_docs
 from smahtiepants.search.filters import resolve_docset_filters
 from smahtiepants.search.index import (
@@ -47,7 +53,7 @@ from smahtiepants.search.index import (
     results_to_json,
     results_to_text,
 )
-from smahtiepants.search.terms import parse_keyword_terms
+from smahtiepants.search.terms import keyword_fts_terms, parse_keyword_terms
 from smahtiepants.server import make_app
 from smahtiepants.server_shared import get_page_content, list_pages
 from smahtiepants.text import extract_html_section, normalize_link_href, render_markdown
@@ -212,6 +218,88 @@ def make_search_result(
         resource_uri=f"smahtiepants://docsets/python/pages/{page_id}",
         read_hint=f'Read full page with get_page_content slug="python" pageId="{page_id}"',
         metadata={},
+    )
+
+
+def write_search_manifest(tmp_path: Path, slugs: list[str]) -> None:
+    """Write a minimal cache manifest for direct search-storage tests."""
+
+    write_cache_manifest(
+        tmp_path,
+        CacheManifest(
+            schema_version=CACHE_SCHEMA_VERSION,
+            updated_at="2026-01-01T00:00:00Z",
+            docs={
+                slug: CacheManifestDocset(
+                    source="devdocs",
+                    slug=slug,
+                    name=slug.title(),
+                    type=slug,
+                    content_format="markdown",
+                    installed_at="2026-01-01T00:00:00Z",
+                    updated_at="2026-01-01T00:00:00Z",
+                    page_count=1,
+                )
+                for slug in slugs
+            },
+        ),
+    )
+
+
+def make_embedding_docset(slug: str) -> dict[str, object]:
+    """Build minimal docset metadata accepted by embedding storage."""
+
+    return {
+        "slug": slug,
+        "name": slug.title(),
+        "source": "devdocs",
+        "version": None,
+        "release": None,
+        "mtime": 1,
+        "dbSize": 1,
+        "contentFormat": "markdown",
+        "installedAt": "2026-01-01T00:00:00Z",
+        "manifestUpdatedAt": "2026-01-01T00:00:00Z",
+    }
+
+
+def make_embedding_chunk(
+    slug: str,
+    page_id: str,
+    page_path: str,
+    text: str,
+    ordinal: int = 0,
+) -> PreparedEmbeddingChunk:
+    """Build a prepared chunk for direct search-storage tests."""
+
+    return PreparedEmbeddingChunk(
+        page={
+            "id": page_id,
+            "filePath": f"{page_id}.md",
+            "title": page_path,
+            "name": page_path,
+            "path": page_path,
+            "type": "Reference",
+            "contentHash": f"{page_id}-source",
+        },
+        ordinal=ordinal,
+        content_hash=f"{page_id}-{ordinal}-chunk",
+        source_hash=f"{page_id}-source",
+        text=text,
+        token_count=1,
+        metadata_json=json.dumps(
+            {
+                "docsetSlug": slug,
+                "docsetName": slug.title(),
+                "pageId": page_id,
+                "pageName": page_path,
+                "pagePath": page_path,
+                "pageType": "Reference",
+                "pageFile": f"{page_id}.md",
+                "chunkOrdinal": ordinal,
+            },
+            separators=(",", ":"),
+        ),
     )
 
 
@@ -1015,12 +1103,80 @@ def test_search_excerpt_trims_long_lines_around_matched_terms() -> None:
     assert len(excerpt) <= 120
 
 
+def test_search_excerpt_expands_matched_headings_to_useful_context() -> None:
+    """Validate heading matches include nearby explanatory content."""
+
+    excerpt = build_result_excerpt(
+        """
+Introductory text before the relevant section.
+
+### `target_arch`
+
+Key-value option set once with the target's CPU architecture. The value is similar to the first element of the platform's target triple.
+
+### `target_feature`
+
+Other content.
+""",
+        ["target_arch", "target", "triple"],
+    )
+
+    assert "### `target_arch`" in excerpt
+    assert "Key-value option set once" in excerpt
+    assert "target triple" in excerpt
+
+
+def test_search_excerpt_omits_leading_chunk_overlap_fragments() -> None:
+    """Validate excerpts skip partial first lines from overlapped chunks."""
+
+    excerpt = build_result_excerpt(
+        """
+re at runtime.
+
+[is_loongarch_feature_detected](std/arch/macro.is_loongarch_feature_detected)
+
+Check for the presence of a CPU feature at runtime.
+""",
+        ["cfg", "target_arch", "target_os", "target", "triple"],
+    )
+
+    assert not excerpt.startswith("re at runtime")
+    assert "[is_loongarch_feature_detected]" in excerpt
+    assert "Check for the presence" in excerpt
+
+
+def test_search_excerpt_splits_html_break_lists_before_trimming() -> None:
+    """Validate long generated lists do not start or end mid-link."""
+
+    excerpt = build_result_excerpt(
+        "s](reference/conditional-compilation#r-cfg.debug_assertions)<br>-   "
+        "[cfg.intro](reference/conditional-compilation#r-cfg.intro)<br>-   "
+        "[cfg.target_arch](reference/conditional-compilation#r-cfg.target_arch)<br>-   "
+        "[cfg.target_os](reference/conditional-compilation#r-cfg.target_os)<br>-   "
+        "[cfg.target_env](reference/conditional-compilation#r-cfg.target_env)",
+        ["cfg", "target_arch", "target_os", "target"],
+        max_chars=240,
+    )
+
+    assert not excerpt.lstrip(".\n ").startswith("s](reference")
+    assert "[cfg.target_arch]" in excerpt
+    assert "[cfg.target_os]" in excerpt
+    assert not excerpt.rstrip(".").endswith("referenc")
+
+
 def test_keyword_terms_ignore_common_stopwords() -> None:
     """Validate keyword terms skip trivial query words."""
 
     assert parse_keyword_terms("sorting a list") == ["sorting", "list"]
     assert parse_keyword_terms("how do I add items to a list") == ["add", "items", "list"]
     assert parse_keyword_terms("c++ arrays") == ["c", "arrays"]
+    assert keyword_fts_terms(["target", "triples", "arrays"]) == [
+        "target",
+        "triples",
+        "triple",
+        "arrays",
+        "array",
+    ]
 
 
 def test_semantic_candidate_count_is_stable_across_limits(
@@ -1164,6 +1320,137 @@ def test_semantic_search_uses_configured_embedding_client(tmp_path: Path) -> Non
         assert storage.annoy_index_metadata("embed") is not None
     finally:
         storage.close()
+
+
+def test_scoped_semantic_search_scores_beyond_annoy_misses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate scoped semantic search is not limited to arbitrary row-order fallback."""
+
+    write_search_manifest(tmp_path, ["rust"])
+    filler_chunks = [
+        make_embedding_chunk(
+            "rust",
+            f"filler-{index}",
+            f"reference/filler-{index}",
+            f"Unrelated filler documentation {index}.",
+        )
+        for index in range(1000)
+    ]
+    target_chunk = make_embedding_chunk(
+        "rust",
+        "conditional-compilation",
+        "reference/conditional-compilation",
+        "The expected scoped semantic answer is here.",
+    )
+    storage = open_embedding_storage(tmp_path)
+    try:
+        storage.replace_docset_chunks(
+            make_embedding_docset("rust"),
+            [*filler_chunks, target_chunk],
+            [[0.0, 1.0] for _chunk in filler_chunks] + [[1.0, 0.0]],
+            "embed",
+        )
+    finally:
+        storage.close()
+
+    class EmptyAnnoyIndexManager:
+        """Represent an Annoy index that misses the scoped docset."""
+
+        def __init__(self, *_args) -> None:
+            """Implement init."""
+
+        def search(self, *_args):
+            """Implement search."""
+            return []
+
+    class FakeEmbeddingClient:
+        """Represent FakeEmbeddingClient."""
+
+        def create_embeddings(self, _input):
+            """Implement create embeddings."""
+            return [[1.0, 0.0]]
+
+    monkeypatch.setattr("smahtiepants.search.index.AnnoyIndexManager", EmptyAnnoyIndexManager)
+
+    results = search_docs(
+        tmp_path,
+        "target triples cfg target_arch target_os",
+        SmahtiepantsConfig(
+            embeddings=EmbeddingsConfig(enabled=True),
+            openai=OpenAiConfig(embedding_model="embed"),
+        ),
+        slugs=["rust"],
+        limit=1,
+        client=FakeEmbeddingClient(),
+    )
+
+    assert results[0].page_path == "reference/conditional-compilation"
+    assert results[0].score == pytest.approx(1.0)
+
+
+def test_keyword_hits_join_semantic_pool_when_annoy_misses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Validate lexical hits with vectors can outrank weaker Annoy candidates."""
+
+    write_search_manifest(tmp_path, ["rust"])
+    filler_chunk = make_embedding_chunk(
+        "rust",
+        "release-profiles",
+        "book/ch14-01-release-profiles",
+        "Cargo builds finished target artifacts in release profiles.",
+    )
+    target_chunk = make_embedding_chunk(
+        "rust",
+        "conditional-compilation",
+        "reference/conditional-compilation",
+        "Target triples use cfg target_arch and target_os conditional compilation.",
+    )
+    storage = open_embedding_storage(tmp_path)
+    try:
+        storage.replace_docset_chunks(
+            make_embedding_docset("rust"),
+            [filler_chunk, target_chunk],
+            [[0.0, 1.0], [1.0, 0.0]],
+            "embed",
+        )
+    finally:
+        storage.close()
+
+    class FillerOnlyAnnoyIndexManager:
+        """Represent an Annoy index that only returns a weak semantic candidate."""
+
+        def __init__(self, *_args) -> None:
+            """Implement init."""
+
+        def search(self, *_args):
+            """Implement search."""
+            return [1]
+
+    class FakeEmbeddingClient:
+        """Represent FakeEmbeddingClient."""
+
+        def create_embeddings(self, _input):
+            """Implement create embeddings."""
+            return [[1.0, 0.0]]
+
+    monkeypatch.setattr("smahtiepants.search.index.AnnoyIndexManager", FillerOnlyAnnoyIndexManager)
+
+    results = search_docs(
+        tmp_path,
+        "target triples cfg target_arch target_os",
+        SmahtiepantsConfig(
+            embeddings=EmbeddingsConfig(enabled=True),
+            openai=OpenAiConfig(embedding_model="embed"),
+        ),
+        limit=1,
+        client=FakeEmbeddingClient(),
+    )
+
+    assert results[0].page_path == "reference/conditional-compilation"
+    assert results[0].match_kind == "hybrid"
+    assert results[0].score == pytest.approx(1.0)
 
 
 def test_search_keeps_semantic_ranking_when_keyword_hits_disagree(tmp_path: Path) -> None:

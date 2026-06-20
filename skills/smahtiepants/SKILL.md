@@ -49,6 +49,7 @@ embeddings are configured.
 smahtiepants search "useEffect cleanup" --slug react --limit 5
 smahtiepants search "request body parsing" --slug express
 smahtiepants search "structuredClone" --language javascript
+smahtiepants search "cfg target_arch target_os target triple" --slug rust
 ```
 
 Useful flags:
@@ -61,6 +62,9 @@ Useful flags:
 
 The default `text` output gives a ranked list with a query-aware **excerpt** and
 a **read hint** for each match. Read the excerpts to find the right page.
+Queries may be natural language or grep-like API terms; for code and language
+reference docs, include exact identifiers, attributes, flags, function names, and
+the surrounding concept words you expect to see.
 
 ### 4. Get more context when an excerpt isn't enough
 
@@ -80,8 +84,10 @@ smahtiepants serve --host 127.0.0.1 --port 43877
 # then GET /api/docsets/<slug>/pages/<pageId>/content
 ```
 
-Prefer iterating on `search` with good queries and `--format json` first; only
-stand up `serve` when you genuinely need whole pages.
+Prefer iterating on `search` with scoped queries and `--format json` first. If a
+result looks close but the excerpt is ambiguous, read the full page from the
+hint before concluding the docs do not contain the answer. Only stand up `serve`
+when you genuinely need whole pages.
 
 ### 5. Ground your answer
 
