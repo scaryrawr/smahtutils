@@ -20,7 +20,7 @@ from smahtiepants.embeddings.storage import (
 )
 
 from .filters import resolve_docset_filters
-from .terms import parse_keyword_terms
+from .terms import parse_keyword_terms, term_variants
 
 SEMANTIC_CANDIDATE_COUNT = 1000
 SEMANTIC_RESULT_POOL = 250
@@ -426,17 +426,6 @@ def line_term_score(line: str, terms: list[str]) -> int:
                     best = max(best, max(1, len(variant) // 2))
         score += best
     return score
-
-
-def term_variants(term: str) -> tuple[str, ...]:
-    """Return simple lexical variants for matching query terms in excerpts."""
-
-    variants = [term]
-    if len(term) > 3 and term.endswith("ies"):
-        variants.append(f"{term[:-3]}y")
-    if len(term) > 3 and term.endswith("s"):
-        variants.append(term[:-1])
-    return tuple(dict.fromkeys(variants))
 
 
 def trim_excerpt(excerpt: str, terms: list[str], max_chars: int) -> str:

@@ -35,8 +35,8 @@ def parse_keyword_terms(query: str) -> list[str]:
     return terms
 
 
-def keyword_term_variants(term: str) -> tuple[str, ...]:
-    """Return safe lexical variants for keyword FTS prefix matching."""
+def term_variants(term: str) -> tuple[str, ...]:
+    """Return simple lexical variants for search term matching."""
 
     variants = [term]
     if len(term) > 3 and term.endswith("ies"):
@@ -52,7 +52,7 @@ def keyword_fts_terms(terms: list[str]) -> list[str]:
     seen: set[str] = set()
     output: list[str] = []
     for term in terms:
-        for variant in keyword_term_variants(term):
+        for variant in term_variants(term):
             if variant not in seen:
                 output.append(variant)
                 seen.add(variant)
