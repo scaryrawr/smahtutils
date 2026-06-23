@@ -46,7 +46,7 @@ When building any FTS5 `MATCH` query from user input (e.g. the `smahtiepants` ke
 
 For `smahties` language support, prefer direct upstream tree-sitter grammar packages and pin them through `uv.lock`; unsupported extensions fall back to whole-file text units.
 
-For `smahties` similarity/query performance, keep SQLite as the authoritative store and Annoy as a rebuildable sidecar index. Store vectors and metadata in SQLite, query Annoy for bounded candidates, then exact-score only those candidates plus any required lexical matches. Physical SQLite sharding only helps when queries can target a subset; unscoped semantic search still requires fanout/merge unless a vector index is added.
+For `smahties` similarity/query performance, keep SQLite as the authoritative store and Annoy as a rebuildable sidecar index. Store vectors and metadata in SQLite, query Annoy for bounded candidates, then exact-score only those candidates plus any required lexical matches. Directory/root indexing should reconcile against stored file state so unchanged files are skipped, removed files are cleaned up, and embedding requests remain explicitly bounded in batch size and concurrency. Physical SQLite sharding only helps when queries can target a subset; unscoped semantic search still requires fanout/merge unless a vector index is added.
 
 For `smahties duplicates`, preserve Codigami-compatible JSON output and keep `.smahties/smahties.sqlite` as the single index. Function/class levels use stored code-unit embeddings with Annoy candidate retrieval plus exact scoring; `--level file` creates transient whole-file embeddings for that run.
 
@@ -56,7 +56,7 @@ Prefer tests next to externally visible behavior in `tests/`. Existing tests cov
 
 For `smahtiepants`, prefer temp cache roots and fake HTTP/OpenAI clients; avoid tests that require live DevDocs, live embedding endpoints, or long-running servers.
 
-For `smahties` indexer resume/locking changes, preserve queue-backed retry semantics: failed claimed work should return to pending and stale in-progress work should be reclaimable. Avoid tests requiring live clipboard, LLM, or embedding endpoints unless isolated with mocks.
+For `smahties` indexer resume/locking changes, preserve queue-backed retry semantics: failed or interrupted claimed work should return to pending, live claimed work should renew its timestamp, stale in-progress work should be reclaimable, and duplicate enqueues that arrive while a path is in progress must still trigger a later retry instead of being lost when the active claim completes. Avoid tests requiring live clipboard, LLM, or embedding endpoints unless isolated with mocks.
 
 ## Commit & Pull Request Guidelines
 

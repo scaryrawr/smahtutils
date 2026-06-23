@@ -6,7 +6,7 @@ from wickedsmaht_config import Config, resolve_setting
 
 from .annoy_index import AnnoyIndexManager
 from .context import RuntimeContext
-from .embedding import OpenAiEmbedder
+from .embedding import EmbeddingBatchLimits, OpenAiEmbedder
 from .indexer import Indexer
 from .models import Priority
 from .parser import ParserRegistry
@@ -21,6 +21,7 @@ def build_state(
     base_url: str | None,
     coding_embedding_model: str | None,
     api_required: bool,
+    embedding_concurrency: int | None = None,
 ) -> AppState:
     """Build the shared application state for CLI or MCP execution."""
 
@@ -34,7 +35,12 @@ def build_state(
         store.delete_file_name(excluded_file)
     scanner = Scanner(context.storage_root)
     purge_non_indexable_files(store, scanner)
-    embedder = OpenAiEmbedder(resolved_base_url, model)
+    limits = (
+        EmbeddingBatchLimits(max_concurrent_requests=embedding_concurrency)
+        if embedding_concurrency is not None
+        else None
+    )
+    embedder = OpenAiEmbedder(resolved_base_url, model, limits)
     indexer = Indexer(scanner, ParserRegistry(), store, embedder)
     annoy = AnnoyIndexManager(state_dir, store)
     return AppState(store, indexer, embedder, context, annoy)

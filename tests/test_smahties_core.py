@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from smahties.app import purge_non_indexable_files
 from smahties.context import RuntimeContext
-from smahties.embedding import EmbeddingBatchLimits, embedding_batch_ranges
-from smahties.models import CodeUnit, LexicalMatch, QueryMatchKind, QueryMode
+from smahties.embedding import EmbeddingBatchLimits, OpenAiEmbedder, embedding_batch_ranges
+from smahties.indexer import Indexer
+from smahties.models import CodeUnit, LexicalMatch, Priority, QueryMatchKind, QueryMode
 from smahties.parser import ParserRegistry
 from smahties.scanner import Scanner, ensure_state_dir
 from smahties.service import build_fts_query, merge_matches
@@ -29,6 +32,21 @@ def test_embedding_batches_are_limited() -> None:
         EmbeddingBatchLimits(max_inputs=2, max_request_bytes=100),
     )
     assert ranges == [(0, 2), (2, 4), (4, 5)]
+
+
+def test_embedder_limits_concurrency_and_preserves_order() -> None:
+    fake_embeddings = FakeEmbeddings()
+    embedder = OpenAiEmbedder(
+        "http://127.0.0.1:1/v1",
+        "model",
+        EmbeddingBatchLimits(max_inputs=1, max_request_bytes=100, max_concurrent_requests=2),
+    )
+    embedder.client = SimpleNamespace(embeddings=fake_embeddings)
+
+    result = asyncio.run(embedder.embed_texts(["a", "bb", "ccc", "dddd"]))
+
+    assert result == [[1.0], [2.0], [3.0], [4.0]]
+    assert fake_embeddings.max_active == 2
 
 
 def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
@@ -174,6 +192,48 @@ def test_purge_non_indexable_files_removes_gitignored_store_entries(tmp_path: Pa
     assert [unit.file_path for unit in store.code_units_by_ids(["kept"])] == ["src/main.py"]
 
 
+def test_indexer_directory_reconciliation_indexes_only_changes_and_deletes_removed(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    unchanged = src / "unchanged.py"
+    changed = src / "changed.py"
+    unchanged.write_text("def unchanged():\n    return 1\n", encoding="utf-8")
+    changed.write_text("def changed():\n    return 2\n", encoding="utf-8")
+    scanner = Scanner(tmp_path)
+    parser = ParserRegistry()
+    store = Store(tmp_path / "smahties.sqlite")
+    embedder = FakeEmbedder()
+    source = scanner.read_source(unchanged)
+    assert source is not None
+    units = parser.parse(source)
+    store.replace_file_units(
+        source.relative_path,
+        source.hash,
+        parser.cache_key_for_path(source.absolute_path),
+        units,
+        embedder.model,
+        [[1.0] for _ in units],
+    )
+    removed = code_unit("removed", file_path="src/removed.py")
+    store.replace_file_units(
+        removed.file_path, "hash-removed", "parser", [removed], "model", [[1.0]]
+    )
+    indexer = Indexer(scanner, parser, store, embedder)
+
+    asyncio.run(indexer.enqueue_path(src, Priority.LOW))
+    outcome = asyncio.run(indexer.process_next_work())
+
+    assert outcome is not None
+    assert outcome.completed == 2
+    embedded_sources = "\n".join(embedder.inputs)
+    assert "def changed" in embedded_sources
+    assert "def unchanged" not in embedded_sources
+    assert store.code_units_by_ids(["removed"]) == []
+    assert store.queue_stats().low_priority == 0
+
+
 def test_state_dir_contains_gitignore(tmp_path: Path) -> None:
     state_dir = ensure_state_dir(tmp_path)
     assert (state_dir / ".gitignore").read_text(encoding="utf-8") == "*\n"
@@ -260,6 +320,36 @@ def test_query_merge_combines_scores() -> None:
 def test_fts_query_uses_safe_prefix_tokens() -> None:
     assert build_fts_query("Find config loader, config loader!") == "find* OR config* OR loader*"
     assert build_fts_query("! ? a") is None
+
+
+class FakeEmbeddings:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+
+    async def create(self, model: str, input: list[str]) -> object:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0.01)
+        self.active -= 1
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(index=index, embedding=[float(len(text))])
+                for index, text in enumerate(input)
+            ]
+        )
+
+
+class FakeEmbedder:
+    model = "model"
+    limits = EmbeddingBatchLimits(max_inputs=2, max_request_bytes=100)
+
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.inputs.extend(texts)
+        return [[float(index + 1)] for index, _ in enumerate(texts)]
 
 
 def code_unit(id_: str, file_path: str = "src/lib.rs") -> CodeUnit:

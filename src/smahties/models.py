@@ -120,6 +120,14 @@ class LeaseStatus:
 
 
 @dataclass(frozen=True)
+class AnnoyStatus:
+    """Current freshness of the rebuildable Annoy sidecar for a model."""
+
+    current: bool
+    item_count: int
+
+
+@dataclass(frozen=True)
 class ServiceStatus:
     """Status payload returned by the CLI and MCP status tool."""
 
@@ -132,6 +140,7 @@ class ServiceStatus:
     queue: QueueStats
     store: StoreStats
     lease: LeaseStatus
+    annoy: AnnoyStatus
 
 
 class QueryMode(str, Enum):

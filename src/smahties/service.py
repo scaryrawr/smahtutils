@@ -48,6 +48,7 @@ async def status(state: AppState) -> ServiceStatus:
         queue=state.indexer.queue_stats(),
         store=state.store.stats(),
         lease=state.indexer.lease_status(),
+        annoy=state.annoy.status(state.indexer.embedder.model),
     )
 
 

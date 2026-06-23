@@ -28,21 +28,28 @@ def start(root: Path, indexer: Indexer, interval_seconds: float = 2.0) -> Pollin
 
 
 async def _poll(root: Path, indexer: Indexer, interval_seconds: float) -> None:
-    seen: dict[Path, tuple[int, int]] = {}
+    seen = _snapshot(root, indexer)
     while True:
-        current: dict[Path, tuple[int, int]] = {}
-        for path in indexer.scanner.discover_files(root):
-            if is_excluded_path(root, path):
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            signature = (stat.st_mtime_ns, stat.st_size)
-            current[path] = signature
+        await asyncio.sleep(interval_seconds)
+        current = _snapshot(root, indexer)
+        for path, signature in current.items():
             if seen.get(path) != signature:
                 await indexer.enqueue_path(path, Priority.HIGH)
         for removed in set(seen) - set(current):
             await indexer.enqueue_delete(removed)
         seen = current
-        await asyncio.sleep(interval_seconds)
+
+
+def _snapshot(root: Path, indexer: Indexer) -> dict[Path, tuple[int, int]]:
+    """Return the current discoverable file signatures for a polling cycle."""
+
+    current: dict[Path, tuple[int, int]] = {}
+    for path in indexer.scanner.discover_files(root):
+        if is_excluded_path(root, path):
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        current[path] = (stat.st_mtime_ns, stat.st_size)
+    return current
