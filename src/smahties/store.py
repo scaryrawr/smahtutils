@@ -353,8 +353,9 @@ class Store:
                 UPDATE work_queue
                 SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = ?
                 WHERE status = 'in_progress' AND claimed_at IS NOT NULL AND claimed_at <= ?
+                    AND claimed_by != ?
                 """,
-                (now, stale_cutoff),
+                (now, stale_cutoff, owner),
             )
             row = self._conn.execute(
                 """
@@ -412,6 +413,38 @@ class Store:
                 (error, now, id_, owner),
             ).rowcount
         return changed > 0
+
+    def requeue_work_for_owner(self, owner: str, error: str) -> int:
+        """Return all work claimed by an owner to pending state."""
+
+        now = unix_now()
+        with self._lock, self._conn:
+            return self._conn.execute(
+                """
+                UPDATE work_queue
+                SET status = 'pending',
+                    error = ?,
+                    claimed_by = NULL,
+                    claimed_at = NULL,
+                    updated_at = ?
+                WHERE status = 'in_progress' AND claimed_by = ?
+                """,
+                (error, now, owner),
+            ).rowcount
+
+    def renew_work_for_owner(self, owner: str) -> int:
+        """Refresh claimed-work timestamps for a live owner."""
+
+        now = unix_now()
+        with self._lock, self._conn:
+            return self._conn.execute(
+                """
+                UPDATE work_queue
+                SET claimed_at = ?, updated_at = ?
+                WHERE status = 'in_progress' AND claimed_by = ?
+                """,
+                (now, now, owner),
+            ).rowcount
 
     def queue_stats(self) -> QueueStats:
         """Return counts for pending high/low priority and in-progress work."""
@@ -493,6 +526,18 @@ class Store:
 
         with self._lock:
             rows = self._conn.execute("SELECT path FROM files ORDER BY path").fetchall()
+        return [row["path"] for row in rows]
+
+    def file_paths_under(self, prefix: str | None) -> list[str]:
+        """Return tracked file paths under an optional directory prefix."""
+
+        if prefix is None:
+            return self.file_paths()
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT path FROM files WHERE {path_prefix_clause('path')} ORDER BY path",
+                path_prefix_params(prefix),
+            ).fetchall()
         return [row["path"] for row in rows]
 
     def lexical_search(

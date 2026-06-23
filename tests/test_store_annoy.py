@@ -39,6 +39,51 @@ def test_work_queue_reclaims_stale_in_progress(tmp_path: Path) -> None:
     assert reclaimed.id == work.id
 
 
+def test_work_queue_does_not_reclaim_current_owners_stale_work(tmp_path: Path) -> None:
+    store = Store(tmp_path / "smahties.sqlite")
+    store.enqueue_work(tmp_path / "src.rs", Priority.HIGH, False)
+    work = store.claim_next_work("owner", 300)
+    assert work is not None
+
+    assert store.claim_next_work("owner", -1) is None
+
+
+def test_work_queue_coalesces_pending_but_preserves_in_progress_retry(
+    tmp_path: Path,
+) -> None:
+    store = Store(tmp_path / "smahties.sqlite")
+    path = tmp_path / "src.rs"
+
+    store.enqueue_work(path, Priority.LOW, False)
+    store.enqueue_work(path, Priority.HIGH, False)
+
+    stats = store.queue_stats()
+    assert stats.high_priority == 1
+    assert stats.low_priority == 0
+
+    work = store.claim_next_work("owner", 300)
+    assert work is not None
+    store.enqueue_work(path, Priority.HIGH, False)
+
+    assert store.queue_stats().in_progress == 1
+    retry = store.claim_next_work("other", 300)
+    assert retry is not None
+    assert retry.id != work.id
+
+
+def test_requeue_work_for_owner_releases_claimed_items(tmp_path: Path) -> None:
+    store = Store(tmp_path / "smahties.sqlite")
+    store.enqueue_work(tmp_path / "src.rs", Priority.HIGH, False)
+    work = store.claim_next_work("owner", 300)
+    assert work is not None
+
+    assert store.requeue_work_for_owner("owner", "interrupted") == 1
+
+    reclaimed = store.claim_next_work("other", 300)
+    assert reclaimed is not None
+    assert reclaimed.id == work.id
+
+
 def test_path_prefix_filters_treat_wildcards_literally(tmp_path: Path) -> None:
     store = Store(tmp_path / "smahties.sqlite")
     underscored = code_unit("underscore", "fn needle_under() {}", "needle", "apps/api_v1/lib.rs")

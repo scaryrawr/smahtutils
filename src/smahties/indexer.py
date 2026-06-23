@@ -4,6 +4,7 @@ import asyncio
 import os
 import time
 from dataclasses import dataclass
+from contextlib import suppress
 from pathlib import Path
 
 from .embedding import OpenAiEmbedder
@@ -14,8 +15,9 @@ from .store import Store
 
 INDEXER_LEASE_NAME = "indexer"
 INDEXER_LEASE_TTL_SECONDS = 15
-WORK_STALE_AFTER_SECONDS = 300
+WORK_STALE_AFTER_SECONDS = INDEXER_LEASE_TTL_SECONDS * 2
 MAX_INDEXER_BATCH_WORK_ITEMS = 128
+DIRECTORY_RECONCILE_YIELD_INTERVAL = 128
 
 
 @dataclass
@@ -100,16 +102,20 @@ class Indexer:
         """Process queued work until the queue is idle."""
 
         summary = IndexRunSummary()
-        while True:
-            if not self.acquire_lease():
-                await asyncio.sleep(2)
-                continue
-            outcome = await self.process_next_work()
-            if outcome is None:
-                return IndexRunOutcome("complete", summary)
-            summary.completed += outcome.completed
-            summary.requeued += outcome.requeued
-            summary.failed += outcome.failed
+        try:
+            while True:
+                if not self.acquire_lease():
+                    await asyncio.sleep(2)
+                    continue
+                outcome = await self.process_next_work()
+                if outcome is None:
+                    return IndexRunOutcome("complete", summary)
+                summary.completed += outcome.completed
+                summary.requeued += outcome.requeued
+                summary.failed += outcome.failed
+        except asyncio.CancelledError:
+            self.requeue_owned_work("indexing interrupted")
+            raise
 
     def queue_stats(self) -> QueueStats:
         """Return current queue counts."""
@@ -136,6 +142,9 @@ class Indexer:
                         await asyncio.wait_for(self._notify.wait(), timeout=1)
                     except TimeoutError:
                         pass
+            except asyncio.CancelledError:
+                self.requeue_owned_work("indexing interrupted")
+                raise
             except Exception:
                 await asyncio.sleep(1)
 
@@ -149,35 +158,41 @@ class Indexer:
 
         summary = IndexRunSummary()
         batch: list[PreparedEmbeddingWork] = []
+        claims: list[WorkClaim] = []
         claimed = 0
-        while claimed < MAX_INDEXER_BATCH_WORK_ITEMS:
-            item = self.store.claim_next_work(self.owner, WORK_STALE_AFTER_SECONDS)
-            if item is None:
-                break
-            claim = WorkClaim(self.store, item.id, self.owner)
-            claimed += 1
-            try:
-                prepared = await self.prepare_item(item)
-                if prepared is None:
-                    claim.complete()
-                    summary.completed += 1
-                else:
-                    batch.append(
-                        PreparedEmbeddingWork(
-                            item=item,
-                            claim=claim,
-                            source_file=prepared.source_file,
-                            parser_key=prepared.parser_key,
-                            units=prepared.units,
+        try:
+            while claimed < MAX_INDEXER_BATCH_WORK_ITEMS:
+                item = self.store.claim_next_work(self.owner, WORK_STALE_AFTER_SECONDS)
+                if item is None:
+                    break
+                claim = WorkClaim(self.store, item.id, self.owner)
+                claims.append(claim)
+                claimed += 1
+                try:
+                    prepared = await self.prepare_item(item)
+                    if prepared is None:
+                        claim.complete()
+                        summary.completed += 1
+                    else:
+                        batch.append(
+                            PreparedEmbeddingWork(
+                                item=item,
+                                claim=claim,
+                                source_file=prepared.source_file,
+                                parser_key=prepared.parser_key,
+                                units=prepared.units,
+                            )
                         )
-                    )
-            except Exception as exc:
-                self.fail_claimed_work(item, claim, exc, summary)
+                except Exception as exc:
+                    self.fail_claimed_work(item, claim, exc, summary)
 
-        if claimed == 0:
-            return None
-        await self.embed_and_commit_batch(batch, summary)
-        return summary
+            if claimed == 0:
+                return None
+            await self.embed_and_commit_batch(batch, summary)
+            return summary
+        except asyncio.CancelledError:
+            self.requeue_active_claims(claims, "indexing interrupted")
+            raise
 
     async def prepare_item(self, item: QueuedWork) -> PreparedFile | None:
         """Prepare a claimed item for embedding or complete it without embedding."""
@@ -187,8 +202,7 @@ class Indexer:
             self.store.delete_path_prefix(rel)
             return None
         if item.path.is_dir():
-            for path in self.scanner.discover_files(item.path):
-                await self.enqueue_path(path, item.priority)
+            await self.enqueue_directory_changes(item.path, item.priority)
             return None
         if not self.scanner.is_discoverable_file(item.path):
             self.store.delete_file(self.scanner.relative_path(item.path))
@@ -205,6 +219,36 @@ class Indexer:
         units = self.parser.parse(source_file)
         return PreparedFile(source_file, parser_key, units)
 
+    async def enqueue_directory_changes(self, path: Path, priority: Priority) -> None:
+        """Reconcile a directory and queue only files that need indexing."""
+
+        discovered_paths = self.scanner.discover_files(path)
+        discovered_relative_paths: set[str] = set()
+        for index, discovered_path in enumerate(discovered_paths, start=1):
+            relative_path = self.scanner.relative_path(discovered_path)
+            discovered_relative_paths.add(relative_path)
+            source_file = self.scanner.read_source(discovered_path)
+            if source_file is None:
+                self.store.delete_file(relative_path)
+                continue
+            parser_key = self.parser.cache_key_for_path(source_file.absolute_path)
+            if not self.store.file_complete_for_model(
+                source_file.relative_path,
+                source_file.hash,
+                parser_key,
+                self.embedder.model,
+            ):
+                await self.enqueue_path(discovered_path, priority)
+            if index % DIRECTORY_RECONCILE_YIELD_INTERVAL == 0:
+                self.renew_active_work()
+                await asyncio.sleep(0)
+
+        for indexed_path in self.store.file_paths_under(
+            scope_prefix_for_directory(self.scanner, path)
+        ):
+            if indexed_path not in discovered_relative_paths:
+                self.store.delete_file(indexed_path)
+
     async def embed_and_commit_batch(
         self,
         batch: list[PreparedEmbeddingWork],
@@ -214,50 +258,96 @@ class Indexer:
 
         if not batch:
             return
-        texts = [unit.source for work in batch for unit in work.units]
-        try:
-            embeddings = await self.embedder.embed_texts(texts)
-            if len(embeddings) != len(texts):
-                raise ValueError(
-                    f"embedding response count {len(embeddings)} did not match unit count {len(texts)}"
-                )
-        except Exception as exc:
-            for work in batch:
-                self.fail_claimed_work(work.item, work.claim, exc, summary)
-            return
-
-        offset = 0
-        for work in batch:
-            end = offset + len(work.units)
-            file_embeddings = embeddings[offset:end]
-            offset = end
+        for group in embedding_work_groups(batch, self.embedder.limits):
+            texts = [unit.source for work in group for unit in work.units]
             try:
-                current_source = self.scanner.read_source(work.item.path)
-                if current_source is None:
-                    self.store.delete_file(self.scanner.relative_path(work.item.path))
+                embeddings = await self.embed_texts_with_lease_heartbeat(texts)
+                if len(embeddings) != len(texts):
+                    raise ValueError(
+                        f"embedding response count {len(embeddings)} did not match unit count {len(texts)}"
+                    )
+            except asyncio.CancelledError:
+                for work in group:
+                    if work.claim.active:
+                        work.claim.requeue("indexing interrupted")
+                        summary.requeued += 1
+                raise
+            except Exception as exc:
+                for work in group:
+                    self.fail_claimed_work(work.item, work.claim, exc, summary)
+                continue
+
+            offset = 0
+            for work in group:
+                end = offset + len(work.units)
+                file_embeddings = embeddings[offset:end]
+                offset = end
+                try:
+                    current_source = self.scanner.read_source(work.item.path)
+                    if current_source is None:
+                        self.store.delete_file(self.scanner.relative_path(work.item.path))
+                        work.claim.complete()
+                        summary.completed += 1
+                        continue
+                    if current_source.hash != work.source_file.hash:
+                        work.claim.requeue("source changed while indexing")
+                        summary.requeued += 1
+                        continue
+                    if not self.acquire_lease():
+                        work.claim.requeue("indexer lease expired before commit")
+                        summary.requeued += 1
+                        continue
+                    self.store.replace_file_units(
+                        work.source_file.relative_path,
+                        work.source_file.hash,
+                        work.parser_key,
+                        work.units,
+                        self.embedder.model,
+                        file_embeddings,
+                    )
                     work.claim.complete()
                     summary.completed += 1
-                    continue
-                if current_source.hash != work.source_file.hash:
-                    work.claim.requeue("source changed while indexing")
-                    summary.requeued += 1
-                    continue
-                if not self.acquire_lease():
-                    work.claim.requeue("indexer lease expired before commit")
-                    summary.requeued += 1
-                    continue
-                self.store.replace_file_units(
-                    work.source_file.relative_path,
-                    work.source_file.hash,
-                    work.parser_key,
-                    work.units,
-                    self.embedder.model,
-                    file_embeddings,
-                )
-                work.claim.complete()
-                summary.completed += 1
-            except Exception as exc:
-                self.fail_claimed_work(work.item, work.claim, exc, summary)
+                except Exception as exc:
+                    self.fail_claimed_work(work.item, work.claim, exc, summary)
+
+    async def embed_texts_with_lease_heartbeat(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts while periodically renewing the indexer lease."""
+
+        heartbeat = asyncio.create_task(self.lease_heartbeat())
+        try:
+            return await self.embedder.embed_texts(texts)
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+
+    async def lease_heartbeat(self) -> None:
+        """Renew the indexer lease while a long operation is in progress."""
+
+        interval = max(1.0, INDEXER_LEASE_TTL_SECONDS / 3)
+        while True:
+            await asyncio.sleep(interval)
+            self.renew_active_work()
+
+    def renew_active_work(self) -> None:
+        """Renew this owner's lease and claimed-work timestamps."""
+
+        self.acquire_lease()
+        self.store.renew_work_for_owner(self.owner)
+
+    def requeue_owned_work(self, reason: str) -> int:
+        """Requeue all work currently claimed by this indexer owner."""
+
+        return self.store.requeue_work_for_owner(self.owner, reason)
+
+    def requeue_active_claims(self, claims: list["WorkClaim"], reason: str) -> int:
+        """Requeue active claims and return how many were changed."""
+
+        changed = 0
+        for claim in claims:
+            if claim.active and claim.requeue(reason):
+                changed += 1
+        return changed
 
     def fail_claimed_work(
         self,
@@ -272,6 +362,47 @@ class Indexer:
         if changed:
             self.store.mark_error(self.scanner.relative_path(item.path), str(error))
         summary.failed += 1
+
+
+def embedding_work_groups(
+    batch: list[PreparedEmbeddingWork],
+    limits: object,
+) -> list[list[PreparedEmbeddingWork]]:
+    """Group prepared files into embedding requests without splitting files."""
+
+    max_inputs = getattr(limits, "max_inputs")
+    max_request_bytes = getattr(limits, "max_request_bytes")
+    groups: list[list[PreparedEmbeddingWork]] = []
+    current: list[PreparedEmbeddingWork] = []
+    current_inputs = 0
+    current_bytes = 0
+    for work in batch:
+        work_inputs = len(work.units)
+        work_bytes = sum(len(unit.source) for unit in work.units)
+        would_exceed = current and (
+            current_inputs + work_inputs > max_inputs
+            or current_bytes + work_bytes > max_request_bytes
+        )
+        if would_exceed:
+            groups.append(current)
+            current = []
+            current_inputs = 0
+            current_bytes = 0
+        current.append(work)
+        current_inputs += work_inputs
+        current_bytes += work_bytes
+    if current:
+        groups.append(current)
+    return groups
+
+
+def scope_prefix_for_directory(scanner: Scanner, path: Path) -> str | None:
+    """Return the store path prefix for a directory, or None for the index root."""
+
+    resolved = path.resolve()
+    if resolved == scanner.root:
+        return None
+    return scanner.relative_path(resolved)
 
 
 class WorkClaim:

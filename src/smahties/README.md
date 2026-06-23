@@ -54,6 +54,8 @@ CLI flags override config values:
 uv run smahties --root /path/to/repo --base-url http://127.0.0.1:14892/v1 --coding-embedding-model <embedding-model>
 ```
 
+Use `--embedding-concurrency <n>` to bound concurrent embedding requests. The default is conservative for local OpenAI-compatible servers; increase it only if your embedding endpoint can handle more parallel requests.
+
 ## CLI commands
 
 | Command | Purpose |
@@ -104,7 +106,7 @@ The scanner skips binary or non-UTF-8 files, files larger than 512 KiB, common g
 
 Python uses the standard library AST parser. Tree-sitter-backed extraction is available for TypeScript, TSX, Rust, C, C++, C#, Go, Bash, CSS, Java, and Ruby. Unsupported extensions fall back to whole-file text units.
 
-SQLite remains the source of truth for files, code units, embeddings, FTS data, queue state, and status. Annoy indexes are rebuildable sidecars under `.smahties/annoy/`.
+SQLite remains the source of truth for files, code units, embeddings, FTS data, queue state, and status. Directory indexing reconciles discovered files against existing SQLite state so unchanged files are skipped, changed or missing files are queued, and removed files are cleaned up. Annoy indexes are rebuildable sidecars under `.smahties/annoy/`; status output reports whether the sidecar is current for the active embedding model.
 
 ## Safety notes
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from annoy import AnnoyIndex
 
+from .models import AnnoyStatus
 from .store import Store
 
 
@@ -54,6 +55,18 @@ class AnnoyIndexManager:
             return 0
         metadata = self.store.annoy_index_metadata(model)
         return int(metadata["item_count"]) if metadata else 0
+
+    def status(self, model: str) -> AnnoyStatus:
+        """Return whether the sidecar metadata matches current embeddings."""
+
+        source_version = self.store.embedding_index_version(model)
+        metadata = self.store.annoy_index_metadata(model)
+        current = bool(
+            metadata
+            and metadata["source_version"] == source_version
+            and Path(metadata["path"]).is_file()
+        )
+        return AnnoyStatus(current, int(metadata["item_count"]) if metadata else 0)
 
     def _ensure_loaded(self, model: str) -> tuple[str, AnnoyIndex] | None:
         source_version = self.store.embedding_index_version(model)

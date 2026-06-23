@@ -92,7 +92,10 @@ class Scanner:
 
         if not self.is_indexable_path(path):
             return None
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return None
         if b"\0" in data:
             return None
         try:

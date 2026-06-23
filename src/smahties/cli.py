@@ -33,7 +33,13 @@ async def async_main() -> None:
     api_required = command in {None, "index", "duplicates"} or (
         command == "query" and args.mode != QueryMode.KEYWORD.value
     )
-    state = build_state(Path(args.root), args.base_url, args.coding_embedding_model, api_required)
+    state = build_state(
+        Path(args.root),
+        args.base_url,
+        args.coding_embedding_model,
+        api_required,
+        args.embedding_concurrency,
+    )
 
     if command == "query":
         response = await query_code(
@@ -111,6 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--base-url", dest="base_url")
     parser.add_argument("--coding-embedding-model", dest="coding_embedding_model")
+    parser.add_argument(
+        "--embedding-concurrency",
+        type=positive_int,
+        help="Maximum concurrent embedding requests; defaults to a conservative value.",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     query = subparsers.add_parser("query")
@@ -158,6 +169,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def positive_int(value: str) -> int:
+    """Parse a positive integer argparse value."""
+
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
 def print_json_or_query(response: object, as_json: bool) -> None:
     """Print query results as JSON or compact human-readable snippets."""
 
@@ -198,6 +218,10 @@ def print_json_or_status(response: object, as_json: bool) -> None:
     print(
         f"Indexed: {response.store.indexed_files} files, {response.store.indexed_units} units, "
         f"{response.store.embedded_units} embeddings, {response.store.lexical_units} lexical units"
+    )
+    print(
+        f"Annoy: {'current' if response.annoy.current else 'stale or missing'}, "
+        f"{response.annoy.item_count} sidecar items"
     )
 
 
