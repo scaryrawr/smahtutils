@@ -85,6 +85,23 @@ def test_scanner_skips_excluded_paths(tmp_path: Path) -> None:
     assert scanner.read_source(lock_file) is None
 
 
+def test_scanner_read_source_skips_files_that_disappear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "src.py"
+    source.write_text("def main(): pass\n", encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+
+    def read_bytes(path: Path) -> bytes:
+        if path == source:
+            raise FileNotFoundError(path)
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    assert Scanner(tmp_path).read_source(source) is None
+
+
 def test_scanner_skips_gitignored_paths(tmp_path: Path) -> None:
     if shutil.which("git") is None:
         pytest.skip("git is required for gitignore filtering")

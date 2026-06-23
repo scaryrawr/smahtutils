@@ -39,6 +39,15 @@ def test_work_queue_reclaims_stale_in_progress(tmp_path: Path) -> None:
     assert reclaimed.id == work.id
 
 
+def test_work_queue_does_not_reclaim_current_owners_stale_work(tmp_path: Path) -> None:
+    store = Store(tmp_path / "smahties.sqlite")
+    store.enqueue_work(tmp_path / "src.rs", Priority.HIGH, False)
+    work = store.claim_next_work("owner", 300)
+    assert work is not None
+
+    assert store.claim_next_work("owner", -1) is None
+
+
 def test_work_queue_coalesces_pending_but_preserves_in_progress_retry(
     tmp_path: Path,
 ) -> None:

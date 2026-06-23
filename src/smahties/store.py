@@ -353,8 +353,9 @@ class Store:
                 UPDATE work_queue
                 SET status = 'pending', claimed_by = NULL, claimed_at = NULL, updated_at = ?
                 WHERE status = 'in_progress' AND claimed_at IS NOT NULL AND claimed_at <= ?
+                    AND claimed_by != ?
                 """,
-                (now, stale_cutoff),
+                (now, stale_cutoff, owner),
             )
             row = self._conn.execute(
                 """
