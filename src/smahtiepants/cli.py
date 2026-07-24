@@ -19,6 +19,7 @@ from .install import install_docsets, remove_docset, update_docsets
 from .models import to_jsonable
 from .search.index import results_to_json, results_to_text, results_to_xml, search_docs
 from .server import serve
+from .server_shared import get_page_content
 
 
 def main() -> None:
@@ -95,6 +96,12 @@ def build_parser() -> argparse.ArgumentParser:
     remove = docs_sub.add_parser("remove")
     remove.add_argument("slug")
     remove.add_argument("--json", action="store_true")
+    page = docs_sub.add_parser("page")
+    page.add_argument("slug")
+    page.add_argument("page_id")
+    page.add_argument("--start-line", type=int)
+    page.add_argument("--end-line", type=int)
+    page.add_argument("--json", action="store_true")
 
     embeddings = subparsers.add_parser("embeddings")
     emb_sub = embeddings.add_subparsers(dest="embeddings_command")
@@ -224,6 +231,20 @@ def handle_docs(args: argparse.Namespace, cache_root: str) -> None:
             print(json.dumps(to_jsonable(result), indent=2))
         else:
             print(f"Removed {result.slug} ({result.pages} pages).")
+        return
+    if args.docs_command == "page":
+        content = get_page_content(
+            cache_root,
+            args.slug,
+            args.page_id,
+            start_line=args.start_line,
+            end_line=args.end_line,
+        )
+        if args.json:
+            print(json.dumps(to_jsonable(content), indent=2))
+        else:
+            print(content.content, end="")
+        return
 
 
 def handle_embeddings(args: argparse.Namespace, cache_root: str) -> None:

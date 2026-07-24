@@ -50,7 +50,7 @@ Output is plain text, grouped by match:
 ```text
 express:guide/routing Routing
 Match: semantic score 0.812
-Read full page: Read full page with get_page_content slug="express" pageId="guide/routing"
+Read full page: CLI: uv run smahtiepants docs page express guide/routing; MCP: get_page_content slug="express" pageId="guide/routing"; resource: smahtiepants://docsets/express/pages/guide/routing
 Excerpt:
 ...
 ```

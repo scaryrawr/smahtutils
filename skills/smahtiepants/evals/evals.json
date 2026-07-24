@@ -8,7 +8,7 @@
       "expected_output": "An accurate Express example using req.params and req.query, grounded in the locally installed Express documentation rather than answered purely from memory.",
       "files": [],
       "expectations": [
-        "The agent ran a smahtiepants command (e.g. `smahtiepants docs installed` or `smahtiepants search ... --slug express`) to consult local documentation",
+        "The agent ran a repo-local smahtiepants command (e.g. `uv run smahtiepants docs installed` or `uv run smahtiepants search ... --slug express`) to consult local documentation",
         "The agent scoped the search to the Express docset (via --slug or --language) rather than a broad unscoped search",
         "The final answer correctly uses req.params for route parameters and req.query for query-string values",
         "The answer references that it was grounded in the local Express documentation"
@@ -34,7 +34,7 @@
       "expected_output": "Correct guidance on Docker multi-stage builds, after the agent checks which docsets are installed and searches the Docker docs locally.",
       "files": [],
       "expectations": [
-        "The agent listed installed docsets (`smahtiepants docs installed`) or searched to confirm a Docker docset is available before answering",
+        "The agent listed installed docsets (`uv run smahtiepants docs installed`) or searched to confirm a Docker docset is available before answering",
         "The agent searched the local Docker documentation with a scoped query",
         "The answer explains multi-stage builds using multiple FROM stages and COPY --from to keep the final image small",
         "The answer is grounded in the local documentation rather than memory alone"
@@ -51,6 +51,19 @@
         "The agent searched a relevant docset (javascript or dom/Web APIs) with a scoped query",
         "The answer identifies structuredClone and notes real limitations (e.g. cannot clone functions, DOM nodes, or certain object types)",
         "The answer is grounded in the local docs and the agent did not answer purely from memory"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "full-page-follow-up",
+      "prompt": "For React useEffect, explain exactly when a cleanup function runs. Make sure you have enough detail to avoid an outdated answer.",
+      "expected_output": "A current explanation of React useEffect cleanup behavior using a React-scoped smahtiepants search and the full-page read command when the excerpt is insufficient.",
+      "files": [],
+      "expectations": [
+        "The agent used `uv run smahtiepants search` with a React-scoped query",
+        "The agent followed the read hint with `uv run smahtiepants docs page` if the search excerpt did not contain enough detail",
+        "The answer correctly explains that cleanup runs before the effect re-runs with changed dependencies and when the component unmounts",
+        "The answer names the local React docs page or docset used"
       ]
     }
   ]

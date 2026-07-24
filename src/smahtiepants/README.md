@@ -16,6 +16,7 @@ uv run smahtiepants cache path
 uv run smahtiepants docs available
 uv run smahtiepants docs install python http
 uv run smahtiepants search "request headers" --slug http
+uv run smahtiepants docs page http <pageId-from-search>
 ```
 
 Start the local server:
@@ -73,6 +74,7 @@ Documentation embeddings use `text_embedding_model`, not `coding_embedding_model
 | `uv run smahtiepants docs install <slug...>` | Download one or more docsets. |
 | `uv run smahtiepants docs update [slug]` | Update one docset, or every installed docset when no slug is given. |
 | `uv run smahtiepants docs remove <slug>` | Remove an installed docset. |
+| `uv run smahtiepants docs page <slug> <pageId>` | Read a full Markdown page returned by search. |
 | `uv run smahtiepants embeddings status [slug]` | Show embedding/index status. |
 | `uv run smahtiepants embeddings refresh <slug>` | Embed missing or stale documentation chunks. |
 | `uv run smahtiepants embeddings rebuild <slug>` | Recreate embeddings for a docset. |
@@ -80,7 +82,7 @@ Documentation embeddings use `text_embedding_model`, not `coding_embedding_model
 | `uv run smahtiepants serve` | Serve REST, MCP, and Copilot hook endpoints. |
 | `uv run smahtiepants config show` | Show resolved runtime configuration with secrets redacted. |
 
-Use `--json` on list/status/install/search commands when a script or agent should consume structured output. `search` also supports `--format text`, `--format json`, and `--format xml`.
+Use `--json` on list/status/install/search/page commands when a script or agent should consume structured output. `search` also supports `--format text`, `--format json`, and `--format xml`.
 
 ## Cache location
 

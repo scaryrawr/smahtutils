@@ -2,13 +2,14 @@
 
 `smahtiepants` mirrors [DevDocs](https://devdocs.io/) docsets into a local cache,
 indexes them with embeddings, and searches them offline. This reference covers
-the command surface most useful when grounding answers in current docs. Assume
-the binary is installed and on `PATH`.
+the command surface most useful when grounding answers in current docs. In this
+repository, run commands as `uv run smahtiepants` from the repo root instead of
+calling a global `smahtiepants` binary.
 
 Global form:
 
 ```bash
-smahtiepants [--config <path>] <command> [...]
+uv run smahtiepants [--config <path>] <command> [...]
 ```
 
 `--config` points at an alternate shared `wickedsmaht_config` JSON file. Normally
@@ -19,11 +20,12 @@ omit it; defaults come from `$HOME/.wickedsmaht/config.json`.
 Manage the local DevDocs mirror.
 
 ```bash
-smahtiepants docs available [--offline] [--json]
-smahtiepants docs installed [--json]
-smahtiepants docs install <slug> [<slug>…] [--force] [--offline] [--json]
-smahtiepants docs update [<slug>] [--force] [--offline] [--json]
-smahtiepants docs remove <slug> [--json]
+uv run smahtiepants docs available [--offline] [--json]
+uv run smahtiepants docs installed [--json]
+uv run smahtiepants docs install <slug> [<slug>…] [--force] [--offline] [--json]
+uv run smahtiepants docs update [<slug>] [--force] [--offline] [--json]
+uv run smahtiepants docs remove <slug> [--json]
+uv run smahtiepants docs page <slug> <pageId> [--start-line <n>] [--end-line <n>] [--json]
 ```
 
 - `available` lists docsets DevDocs offers. `--offline` uses cached metadata
@@ -34,6 +36,9 @@ smahtiepants docs remove <slug> [--json]
 - `install` downloads one or more docsets and (when embeddings are configured)
   builds the search index. `--force` reinstalls even if current.
 - `update` refreshes installed docsets; with no slug it updates all.
+- `page` reads the full Markdown content for a page returned by search. Use
+  optional line bounds for large pages; JSON output includes `content`,
+  `startLine`, `endLine`, and `totalLines`.
 - Slugs accept aliases and language-like names (`js`, `ts`, `py`, `python`,
   `c++`, `nodejs`) that resolve to canonical docsets, so you don't create
   duplicate cache entries.
@@ -43,7 +48,7 @@ smahtiepants docs remove <slug> [--json]
 Semantic + keyword search over installed docs.
 
 ```bash
-smahtiepants search "<query>" [--slug <slug>]… [--language <name>]… \
+uv run smahtiepants search "<query>" [--slug <slug>]… [--language <name>]… \
   [--limit <n>] [--format text|json|xml] [--json]
 ```
 
@@ -74,17 +79,19 @@ includes:
 - `readHint` and `resourceUri` — how to fetch the entire page.
 
 Use `--format json` when an excerpt is too short; its `text` field holds the
-whole chunk. If a result looks close but ambiguous, use `readHint`/`resourceUri`
-to fetch the full page before deciding the docs do not cover the topic.
+whole chunk. If a result looks close but ambiguous, use the `docs page` command
+from `readHint` to fetch the full page before deciding the docs do not cover the
+topic. `readHint` also includes the MCP `get_page_content` call and resource URI
+for harnesses that expose those surfaces.
 
 ## embeddings
 
 Inspect and rebuild the semantic index.
 
 ```bash
-smahtiepants embeddings status [<slug>] [--json]
-smahtiepants embeddings refresh <slug> [--json]   # embed new/changed chunks
-smahtiepants embeddings rebuild <slug> [--json]   # re-embed everything
+uv run smahtiepants embeddings status [<slug>] [--json]
+uv run smahtiepants embeddings refresh <slug> [--json]   # embed new/changed chunks
+uv run smahtiepants embeddings rebuild <slug> [--json]   # re-embed everything
 ```
 
 `status` reports the database path, whether embeddings are enabled/configured,
@@ -97,7 +104,7 @@ embedding model configured in `wickedsmaht_config`.
 Run the read-only REST + MCP + Copilot-hook server, used for full-page reads.
 
 ```bash
-smahtiepants serve [--host <host>] [--port <port>]
+uv run smahtiepants serve [--host <host>] [--port <port>]
 ```
 
 Relevant endpoints:
@@ -110,10 +117,10 @@ Relevant endpoints:
 ## cache / sources / config
 
 ```bash
-smahtiepants cache path          # print the docs cache root
-smahtiepants sources list        # list upstream sources (DevDocs)
-smahtiepants config path         # path to the shared config file
-smahtiepants config show         # effective config (secrets redacted)
+uv run smahtiepants cache path          # print the docs cache root
+uv run smahtiepants sources list        # list upstream sources (DevDocs)
+uv run smahtiepants config path         # path to the shared config file
+uv run smahtiepants config show         # effective config (secrets redacted)
 ```
 
 The cache lives under `SMAHTIEPANTS_CACHE_DIR`, `$XDG_CACHE_HOME/smahtiepants`,

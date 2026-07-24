@@ -782,6 +782,25 @@ def test_installed_docset_helpers_accept_aliases(tmp_path: Path) -> None:
     assert "Request headers" in content.content
 
 
+def test_docs_page_cli_reads_matched_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Validate the CLI can read a full page from a search result page ID."""
+
+    install_docset(
+        "http",
+        str(tmp_path),
+        http=FakeHttp(tmp_path),
+        config=SmahtiepantsConfig(embeddings=EmbeddingsConfig(enabled=False)),
+    )
+    pages = list_pages(tmp_path, "http")
+    monkeypatch.setenv("SMAHTIEPANTS_CACHE_DIR", str(tmp_path))
+
+    run_cli(["docs", "page", "http", str(pages["items"][0]["id"])])
+
+    assert "Request headers" in capsys.readouterr().out
+
+
 def test_remove_docset_accepts_aliases(tmp_path: Path) -> None:
     """Validate docs remove resolves stored aliases."""
     install_docset(
@@ -972,10 +991,12 @@ def test_search_output_prefers_query_aware_excerpt_and_read_hint(tmp_path: Path)
     assert json_output["matches"][0]["resourceUri"] == (
         f"smahtiepants://docsets/http/pages/{results[0].page_id}"
     )
+    assert "uv run smahtiepants docs page http" in json_output["matches"][0]["readHint"]
     assert "get_page_content" in json_output["matches"][0]["readHint"]
     mcp_text = mcp_response["result"]["content"][0]["text"]
     assert "needle line" in mcp_text
     assert "Read full page:" in mcp_text
+    assert "uv run smahtiepants docs page http" in mcp_text
     assert "get_page_content" in mcp_text
 
 

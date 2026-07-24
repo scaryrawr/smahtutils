@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import shlex
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -223,10 +224,7 @@ def chunk_to_result(
         metadata = {}
     excerpt = build_result_excerpt(chunk.text, terms)
     resource_uri = f"smahtiepants://docsets/{chunk.docset_slug}/pages/{chunk.page_id}"
-    read_hint = (
-        f'Read full page with get_page_content slug="{chunk.docset_slug}" '
-        f'pageId="{chunk.page_id}" or resource {resource_uri}'
-    )
+    read_hint = full_page_read_hint(chunk.docset_slug, chunk.page_id, resource_uri)
     return SearchResult(
         score=score,
         match_kind=match_kind,
@@ -243,6 +241,17 @@ def chunk_to_result(
         resource_uri=resource_uri,
         read_hint=read_hint,
         metadata=metadata,
+    )
+
+
+def full_page_read_hint(slug: str, page_id: str, resource_uri: str) -> str:
+    """Return CLI, MCP, and resource options for reading a matched page."""
+
+    command = f"uv run smahtiepants docs page {shlex.quote(slug)} {shlex.quote(page_id)}"
+    return (
+        f"CLI: {command}; "
+        f'MCP: get_page_content slug="{slug}" pageId="{page_id}"; '
+        f"resource: {resource_uri}"
     )
 
 
