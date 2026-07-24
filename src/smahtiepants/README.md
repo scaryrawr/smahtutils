@@ -119,6 +119,8 @@ DevDocs docsets are resolved through upstream aliases first, curated aliases sec
 
 SQLite is the authoritative store for documentation chunks and vectors. Annoy indexes are rebuildable sidecar files used to find bounded semantic candidates quickly; exact scores are computed from vectors loaded back from SQLite. Search results include an excerpt plus a read hint so agents can fetch the full matched page when needed.
 
+For direct CLI use, pass the result's slug and page ID to `uv run smahtiepants docs page <slug> <pageId>`. This reads the cached Markdown file directly; starting `serve` is only necessary for REST, MCP, or hook clients.
+
 ## Safety notes
 
 Do not commit the cache directory, embeddings, API responses, bearer tokens, or copied documentation content. Keep the server bound to `127.0.0.1` unless you have configured auth and understand the exposure.

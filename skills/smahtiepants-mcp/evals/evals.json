@@ -30,12 +30,13 @@
     {
       "id": 3,
       "name": "full-page-follow-up-mcp",
-      "prompt": "For React useEffect, explain when a cleanup function runs. Make sure you have enough detail to avoid an outdated answer.",
-      "expected_output": "A current explanation of React useEffect cleanup behavior using smahtiepants MCP search results and, when the excerpt is insufficient, get_page_content for the matched page.",
+      "prompt": "For React useEffect, explain when a cleanup function runs. Search the local React docs through MCP, but do not rely on the search excerpt alone: read the full matched page through MCP before answering.",
+      "expected_output": "A current explanation of React useEffect cleanup behavior using smahtiepants MCP search results followed by get_page_content for the matched page.",
       "files": [],
       "expectations": [
         "The agent used search_docs with a React-scoped query",
-        "The agent used get_page_content if the search excerpt did not contain enough detail",
+        "The agent used get_page_content with the matched slug and page ID",
+        "The agent did not run a smahtiepants shell command, start the server, or call REST to read the page",
         "The answer correctly explains that cleanup runs before the effect re-runs with changed dependencies and when the component unmounts",
         "The answer names the local React docs page or docset used"
       ]

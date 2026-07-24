@@ -50,7 +50,7 @@ Output is plain text, grouped by match:
 ```text
 express:guide/routing Routing
 Match: semantic score 0.812
-Read full page: CLI: uv run smahtiepants docs page express guide/routing; MCP: get_page_content slug="express" pageId="guide/routing"; resource: smahtiepants://docsets/express/pages/guide/routing
+Read full page: get_page_content slug="express" pageId="guide/routing"; resource: smahtiepants://docsets/express/pages/guide/routing
 Excerpt:
 ...
 ```
@@ -84,7 +84,8 @@ Example:
 ```
 
 Use this when an excerpt does not include enough surrounding detail, syntax, or
-edge-case information to answer confidently.
+edge-case information to answer confidently. Keep the follow-up inside MCP; do
+not shell out to the CLI or call the REST content endpoint.
 
 ## Resources
 

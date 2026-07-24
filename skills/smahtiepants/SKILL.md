@@ -85,19 +85,18 @@ hint:
 uv run smahtiepants docs page <slug> <pageId>
 ```
 
-The read hint also references the page's resource
-(`smahtiepants://docsets/<slug>/pages/<pageId>`). Full-page reads are served over
-the local server / MCP endpoint when you need an HTTP or MCP surface:
+Copy `docsetSlug` and `pageId` from the search result into this command. It reads
+the installed Markdown page directly from the local cache; do not start
+`smahtiepants serve`, call REST, or try MCP for a CLI workflow.
 
 ```bash
-uv run smahtiepants serve --host 127.0.0.1 --port 43877
-# then GET /api/docsets/<slug>/pages/<pageId>/content
+uv run smahtiepants docs page react hooks/useeffect
 ```
 
-Prefer iterating on `search` with scoped queries and `--format json` first. If a
-result looks close but the excerpt is ambiguous, read the full page from the
-hint before concluding the docs do not contain the answer. Only stand up `serve`
-when you genuinely need whole pages.
+Use `--start-line` and `--end-line` for a bounded section of a large page, or
+`--json` when structured content and line metadata are useful. If a result looks
+close but the excerpt is ambiguous, read the full page before concluding the
+docs do not contain the answer.
 
 ### 5. Ground your answer
 

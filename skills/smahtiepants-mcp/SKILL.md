@@ -13,7 +13,8 @@ or current-best-practice questions.
 The server searches a local DevDocs mirror with semantic + keyword search. It is
 read-only through MCP: use it to discover installed docsets, search excerpts, and
 read full Markdown pages. Do not start a shell command just to query
-documentation when the MCP tools are already available.
+documentation when the MCP tools are already available, and do not switch to the
+REST endpoint after an MCP search.
 
 ## Workflow
 
@@ -68,6 +69,10 @@ Example arguments:
 Use `startLine` and `endLine` only when you need a specific line range from a
 large page. If your harness supports MCP resources, the same pages are available
 as `smahtiepants://docsets/<slug>/pages/<pageId>`.
+
+Stay on the MCP surface for the whole workflow. Do not run
+`smahtiepants docs page`, start `smahtiepants serve`, or call a REST content
+endpoint as a substitute for `get_page_content`.
 
 ### 4. Answer from the docs
 

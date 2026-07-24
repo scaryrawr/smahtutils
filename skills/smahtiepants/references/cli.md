@@ -81,8 +81,17 @@ includes:
 Use `--format json` when an excerpt is too short; its `text` field holds the
 whole chunk. If a result looks close but ambiguous, use the `docs page` command
 from `readHint` to fetch the full page before deciding the docs do not cover the
-topic. `readHint` also includes the MCP `get_page_content` call and resource URI
-for harnesses that expose those surfaces.
+topic:
+
+```bash
+uv run smahtiepants search "useEffect cleanup" --slug react --limit 3
+uv run smahtiepants docs page react hooks/useeffect
+uv run smahtiepants docs page react hooks/useeffect --start-line 40 --end-line 120
+```
+
+Copy `docsetSlug` and `pageId` from the selected search result. `docs page` reads
+the installed Markdown file directly from the local cache, so a CLI workflow
+does not require `serve`, REST, or MCP.
 
 ## embeddings
 
@@ -101,7 +110,8 @@ embedding model configured in `wickedsmaht_config`.
 
 ## serve
 
-Run the read-only REST + MCP + Copilot-hook server, used for full-page reads.
+Run the read-only REST + MCP + Copilot-hook server for clients that explicitly
+need those transports. CLI full-page reads should use `docs page` instead.
 
 ```bash
 uv run smahtiepants serve [--host <host>] [--port <port>]
